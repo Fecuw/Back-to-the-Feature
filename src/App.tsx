@@ -44,6 +44,8 @@ import type {
   SimulationResult,
 } from './types'
 import { TerminalPanel } from './components/TerminalPanel'
+import { GoogleSignInButton } from './components/GoogleSignInButton'
+import { apiUrl, createRuntimeSession, deleteRuntimeSession, getStoredAuth } from './lib/api'
 
 const phaseLabels: Record<Phase, string> = {
   INITIALIZING: '環境構築中',
@@ -64,9 +66,10 @@ function App() {
   const [activeStage, setActiveStage] = useState<LoadedStage | null>(null)
   const [sessionKey, setSessionKey] = useState(0)
   const [profileOpen, setProfileOpen] = useState(false)
+  const [authRevision, setAuthRevision] = useState(0)
 
   if (!activeStage) {
-    return <StageSelect onSelect={setActiveStage} onProfile={() => setProfileOpen(true)} profileOpen={profileOpen} onCloseProfile={() => setProfileOpen(false)} />
+    return <StageSelect key={authRevision} onSelect={setActiveStage} onProfile={() => setProfileOpen(true)} profileOpen={profileOpen} onCloseProfile={() => setProfileOpen(false)} onAuthenticated={() => { setAuthRevision((value) => value + 1); setProfileOpen(false) }} />
   }
 
   return (
@@ -96,13 +99,16 @@ function StageSelect({
   onProfile,
   profileOpen,
   onCloseProfile,
+  onAuthenticated,
 }: {
   onSelect: (stage: LoadedStage) => void
   onProfile: () => void
   profileOpen: boolean
   onCloseProfile: () => void
+  onAuthenticated: () => void
 }) {
   const progress = useProgress((state) => state.progress)
+  const auth = getStoredAuth()
   const cleared = Object.values(progress).filter((item) => item.cleared).length
 
   return (
@@ -111,7 +117,7 @@ function StageSelect({
         <Brand />
         <div className="header-actions">
           <div className="system-indicator"><span /> SYSTEM READY</div>
-          <button className="icon-text-button" onClick={onProfile}><User size={16} /> DEMO OPERATOR</button>
+          <button className="icon-text-button" onClick={onProfile}><User size={16} /> {(auth?.user.displayName ?? 'DEMO OPERATOR').toUpperCase()}</button>
         </div>
       </header>
 
@@ -159,7 +165,7 @@ function StageSelect({
         </section>
       </main>
 
-      {profileOpen && <ProfileDialog onClose={onCloseProfile} />}
+      {profileOpen && <ProfileDialog onClose={onCloseProfile} onAuthenticated={onAuthenticated} />}
     </div>
   )
 }
@@ -180,31 +186,35 @@ function StageMiniMap({ stage }: { stage: LoadedStage }) {
   )
 }
 
-function ProfileDialog({ onClose }: { onClose: () => void }) {
+function ProfileDialog({ onClose, onAuthenticated }: { onClose: () => void; onAuthenticated: () => void }) {
   const progress = useProgress((state) => state.progress)
+  const auth = getStoredAuth()
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
       <section className="profile-dialog" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
         <button className="icon-button close-button" onClick={onClose} title="閉じる"><X size={18} /></button>
         <div className="profile-avatar"><User size={25} /></div>
-        <p className="eyebrow">LOCAL DEMO PROFILE</p>
-        <h2>Demo Operator</h2>
+        <p className="eyebrow">{auth ? 'AUTHENTICATED PROFILE' : 'LOCAL DEMO PROFILE'}</p>
+        <h2>{auth?.user.displayName ?? 'Demo Operator'}</h2>
         <div className="profile-stats">
           <div><strong>{Object.values(progress).filter((item) => item.cleared).length}</strong><span>クリア</span></div>
           <div><strong>{Object.values(progress).reduce((sum, item) => sum + item.hints, 0)}</strong><span>ヒント</span></div>
           <div><strong>{Object.values(progress).reduce((sum, item) => sum + item.attempts, 0)}</strong><span>検証</span></div>
         </div>
-        <button className="google-button"><span>G</span> Googleでログイン</button>
-        <p className="dialog-note">デモ進行度はこのブラウザに保存されます。</p>
+        <GoogleSignInButton onAuthenticated={() => onAuthenticated()} />
+        <p className="dialog-note">{auth ? auth.user.email : 'デモ進行度はこのブラウザに保存されます。'}</p>
       </section>
     </div>
   )
 }
 
 function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: () => void; onReset: () => void }) {
+  const minimumConsoleHeight = 140
+  const defaultConsoleHeight = 230
   const defaultSettings = useMemo(() => createDefaultSettings(stage), [stage])
   const [phase, setPhase] = useState<Phase>('INITIALIZING')
   const [selectedServerId, setSelectedServerId] = useState(stage.infra.servers.find((server) => server.shell)?.id ?? stage.infra.servers[0].id)
+  const [terminalServerId, setTerminalServerId] = useState(stage.infra.servers.find((server) => server.shell)?.id ?? stage.infra.servers[0].id)
   const [selectedCheckpoint, setSelectedCheckpoint] = useState(stage.checkpoints[0].id)
   const [settings, setSettings] = useState(defaultSettings)
   const [draft, setDraft] = useState(defaultSettings)
@@ -220,14 +230,50 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
   const [resultDialog, setResultDialog] = useState<SimulationResult | null>(null)
   const [elapsed, setElapsed] = useState(0)
   const [confirmReset, setConfirmReset] = useState(false)
+  const [consoleHeight, setConsoleHeight] = useState(defaultConsoleHeight)
+  const [runtime, setRuntime] = useState<{
+    status: 'local' | 'connecting' | 'live' | 'error'
+    sessionId?: string
+    accessToken?: string
+    message?: string
+  }>({ status: apiUrl ? 'connecting' : 'local' })
   const startedAt = useRef(Date.now())
   const timers = useRef<number[]>([])
+  const gameShellRef = useRef<HTMLDivElement>(null)
+  const consoleResizeDrag = useRef<{ startY: number; startHeight: number } | null>(null)
   const finish = useProgress((state) => state.finish)
 
   const selectedServer = stage.infra.servers.find((server) => server.id === selectedServerId) ?? stage.infra.servers[0]
+  const terminalServers = stage.infra.servers.filter((server) => server.shell)
+  const terminalServer = terminalServers.find((server) => server.id === terminalServerId) ?? terminalServers[0] ?? stage.infra.servers[0]
   const maxTime = Math.max(...Object.values(stage.scenario.nodes).map((node) => node.time), 60)
   const observed = phase !== 'INITIALIZING' && results.length > 0
   const changes = stage.defenses.filter((defense) => draft[defense.id] !== settings[defense.id])
+
+  const maximumConsoleHeight = () => {
+    const shellHeight = gameShellRef.current?.getBoundingClientRect().height ?? window.innerHeight
+    return Math.max(minimumConsoleHeight, Math.min(520, shellHeight - 58 - 44 - 130 - 180))
+  }
+  const clampConsoleHeight = (height: number) => Math.min(maximumConsoleHeight(), Math.max(minimumConsoleHeight, height))
+  const resizeConsoleByKeyboard = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+    const increments: Record<string, number> = { ArrowUp: 20, ArrowDown: -20, PageUp: 80, PageDown: -80 }
+    if (event.key === 'Home') {
+      event.preventDefault()
+      setConsoleHeight(minimumConsoleHeight)
+    } else if (event.key === 'End') {
+      event.preventDefault()
+      setConsoleHeight(maximumConsoleHeight())
+    } else if (event.key in increments) {
+      event.preventDefault()
+      setConsoleHeight((height) => clampConsoleHeight(height + increments[event.key]))
+    }
+  }
+
+  useEffect(() => {
+    const keepConsoleInBounds = () => setConsoleHeight((height) => clampConsoleHeight(height))
+    window.addEventListener('resize', keepConsoleInBounds)
+    return () => window.removeEventListener('resize', keepConsoleInBounds)
+  }, [])
 
   useEffect(() => {
     const interval = window.setInterval(() => setElapsed(Math.floor((Date.now() - startedAt.current) / 1000)), 1000)
@@ -245,6 +291,26 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
       timers.current.forEach(window.clearTimeout)
     }
   }, [stage, defaultSettings])
+
+  useEffect(() => {
+    if (!apiUrl) return
+    let disposed = false
+    let createdSessionId = ''
+    setRuntime({ status: 'connecting' })
+    void createRuntimeSession(stage.id)
+      .then(({ session, auth }) => {
+        createdSessionId = session.id
+        if (disposed) return deleteRuntimeSession(session.id)
+        setRuntime({ status: 'live', sessionId: session.id, accessToken: auth.accessToken })
+      })
+      .catch((error: Error) => {
+        if (!disposed) setRuntime({ status: 'error', message: error.message })
+      })
+    return () => {
+      disposed = true
+      if (createdSessionId) void deleteRuntimeSession(createdSessionId)
+    }
+  }, [stage.id])
 
   const rewind = () => {
     const checkpoint = stage.checkpoints.find((item) => item.id === selectedCheckpoint)!
@@ -301,7 +367,7 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
   })
 
   return (
-    <div className="shell game-shell" style={{ '--stage-accent': stage.accent } as React.CSSProperties}>
+    <div ref={gameShellRef} className="shell game-shell" style={{ '--stage-accent': stage.accent, '--console-height': `${consoleHeight}px` } as React.CSSProperties}>
       <header className="app-header game-header">
         <button className="back-button" onClick={onExit} title="ステージ一覧"><ArrowLeft size={18} /></button>
         <Brand />
@@ -369,6 +435,32 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
       </main>
 
       <section className="console-panel panel">
+        <button
+          className="console-resize-handle"
+          type="button"
+          role="separator"
+          aria-label="ターミナルとイベントログの高さを変更"
+          aria-orientation="horizontal"
+          aria-valuemin={minimumConsoleHeight}
+          aria-valuemax={maximumConsoleHeight()}
+          aria-valuenow={Math.round(consoleHeight)}
+          title="上下にドラッグしてサイズ変更（ダブルクリックで初期サイズ）"
+          onDoubleClick={() => setConsoleHeight(defaultConsoleHeight)}
+          onKeyDown={resizeConsoleByKeyboard}
+          onPointerDown={(event) => {
+            consoleResizeDrag.current = { startY: event.clientY, startHeight: consoleHeight }
+            event.currentTarget.setPointerCapture(event.pointerId)
+          }}
+          onPointerMove={(event) => {
+            const drag = consoleResizeDrag.current
+            if (drag) setConsoleHeight(clampConsoleHeight(drag.startHeight + drag.startY - event.clientY))
+          }}
+          onPointerUp={(event) => {
+            consoleResizeDrag.current = null
+            if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+          }}
+          onPointerCancel={() => { consoleResizeDrag.current = null }}
+        ><span /></button>
         <div className="console-toolbar">
           <div className="tab-list console-tabs">
             <button className={consoleTab === 'logs' ? 'active' : ''} onClick={() => setConsoleTab('logs')}><FileCode2 size={15} /> イベントログ <span>{logs.length}</span></button>
@@ -380,10 +472,17 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
               <label><Filter size={14} /><select value={logServer} onChange={(event) => setLogServer(event.target.value)}><option value="all">ALL NODES</option>{stage.infra.servers.map((server) => <option key={server.id} value={server.id}>{server.label}</option>)}</select></label>
             </div>
           )}
-          {consoleTab === 'terminal' && <div className="terminal-target"><span>TARGET</span><strong>{selectedServer.label}</strong><i /></div>}
+          {consoleTab === 'terminal' && (
+            <div className="terminal-targets">
+              <div className="terminal-switcher" role="group" aria-label="ターミナル対象">
+                {terminalServers.map((server) => <button key={server.id} className={terminalServerId === server.id ? 'active' : ''} onClick={() => setTerminalServerId(server.id)}><ServerIcon server={server} /> {server.label}</button>)}
+              </div>
+              <div className={`runtime-status runtime-${runtime.status}`} title={runtime.message}><i /><strong>{runtime.status === 'live' ? 'LIVE DOCKER' : runtime.status === 'connecting' ? 'CONNECTING' : runtime.status === 'error' ? 'LOCAL FALLBACK' : 'LOCAL SIM'}</strong></div>
+            </div>
+          )}
         </div>
         <div className="console-body">
-          {consoleTab === 'logs' ? <LogViewer logs={filteredLogs} loading={phase === 'INITIALIZING'} /> : <TerminalPanel server={selectedServer} stage={stage} settings={settings} />}
+          {consoleTab === 'logs' ? <LogViewer logs={filteredLogs} loading={phase === 'INITIALIZING'} /> : <TerminalPanel server={terminalServer} stage={stage} settings={settings} connection={runtime.status === 'live' && runtime.sessionId && runtime.accessToken ? { sessionId: runtime.sessionId, accessToken: runtime.accessToken } : undefined} />}
         </div>
       </section>
 

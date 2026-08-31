@@ -2,14 +2,44 @@ import { useEffect, useRef } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import type { LoadedStage, ServerDefinition } from '../types'
+import { terminalSocketUrl } from '../lib/api'
+import { createTerminalFiles } from '../lib/terminalFilesystem'
+
+export interface LiveTerminalConnection {
+  sessionId: string
+  accessToken: string
+}
 
 interface TerminalPanelProps {
   server: ServerDefinition
   stage: LoadedStage
   settings: Record<string, boolean>
+  connection?: LiveTerminalConnection
 }
 
-export function TerminalPanel({ server, stage, settings }: TerminalPanelProps) {
+const helpEntries = [
+  ['help [command]', 'command: optional', '全コマンド、または指定コマンドの詳細を表示'],
+  ['hostname', 'none', '現在のコンテナ名を表示'],
+  ['whoami', 'none', '非rootのセッションユーザーを表示'],
+  ['status [--json]', '--json: JSON出力', 'ノード、ステージ、稼働状態を表示'],
+  ['services [--all]', '--all: 補助プロセスも表示', 'このノードのサービス一覧を表示'],
+  ['ports [--listen]', '--listen: LISTENのみ', '待受ポートとプロセスを表示'],
+  ['ps [--sort cpu|mem]', '--sort: cpu または mem', 'プロセス一覧を指定基準で並び替え'],
+  ['logs [service] [--lines N]', 'service; N: 1-200', '隔離されたサービスログを表示'],
+  ['inspect [defense|network]', 'section: optional', '防御設定またはネットワーク境界を調査'],
+  ['ls [path]', 'path: optional', 'workspace内のREADMEと設定ファイルを一覧表示'],
+  ['cat PATH', 'workspace file', 'READMEまたは設定ファイルの内容を表示'],
+  ['config get|set PATH [VALUE]', 'action; workspace path; value', 'workspace内の設定を読み書き'],
+] as const
+
+function normalizeWorkspacePath(path = '.') {
+  if (path.includes('..')) return null
+  const normalized = path.replace(/^\/workspace\/?/, '').replace(/^\.\//, '').replace(/\/$/, '')
+  if (normalized === '.') return ''
+  return normalized.startsWith('/') || normalized.includes('/') ? null : normalized
+}
+
+export function TerminalPanel({ server, stage, settings, connection }: TerminalPanelProps) {
   const mountRef = useRef<HTMLDivElement>(null)
   const settingsRef = useRef(settings)
   settingsRef.current = settings
@@ -23,19 +53,11 @@ export function TerminalPanel({ server, stage, settings }: TerminalPanelProps) {
       fontFamily: '"IBM Plex Mono", "SFMono-Regular", Consolas, monospace',
       fontSize: 12,
       lineHeight: 1.45,
+      scrollback: 1500,
       theme: {
-        background: '#090b0d',
-        foreground: '#ccd3d2',
-        cursor: '#73e0c1',
-        selectionBackground: '#28483f',
-        black: '#101417',
-        red: '#ff6b55',
-        green: '#73e0c1',
-        yellow: '#e4b84b',
-        blue: '#79a7ff',
-        magenta: '#c993ff',
-        cyan: '#67d3e8',
-        white: '#e8eceb',
+        background: '#090b0d', foreground: '#ccd3d2', cursor: '#73e0c1', selectionBackground: '#28483f',
+        black: '#101417', red: '#ff6b55', green: '#73e0c1', yellow: '#e4b84b', blue: '#79a7ff',
+        magenta: '#c993ff', cyan: '#67d3e8', white: '#e8eceb',
       },
     })
     const fit = new FitAddon()
@@ -43,54 +65,160 @@ export function TerminalPanel({ server, stage, settings }: TerminalPanelProps) {
     terminal.open(mountRef.current)
     fit.fit()
 
-    const prompt = () => terminal.write(`\r\n\x1b[32moperator@${server.label.toLowerCase()}\x1b[0m:\x1b[34m~\x1b[0m$ `)
-    terminal.writeln(`Back to the Feature // isolated shell // ${server.ip}`)
+    let disposed = false
+    let socket: WebSocket | undefined
+    const resize = () => {
+      if (disposed) return
+      fit.fit()
+      if (socket?.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'resize', cols: terminal.cols, rows: terminal.rows }))
+      }
+    }
+    const observer = new ResizeObserver(resize)
+    observer.observe(mountRef.current)
+
+    if (connection) {
+      terminal.writeln(`Back to the Feature // connecting ${server.label} ...`)
+      socket = new WebSocket(terminalSocketUrl(connection.sessionId, server.id), ['btf-terminal', connection.accessToken])
+      socket.binaryType = 'arraybuffer'
+      socket.addEventListener('open', () => {
+        if (disposed) return
+        resize()
+        terminal.focus()
+      })
+      socket.addEventListener('message', (event) => {
+        if (disposed) return
+        terminal.write(typeof event.data === 'string' ? event.data : new Uint8Array(event.data as ArrayBuffer))
+      })
+      socket.addEventListener('close', (event) => {
+        if (disposed) return
+        terminal.writeln(`\r\n\r\n\x1b[31m[terminal disconnected: ${event.reason || event.code}]\x1b[0m`)
+      })
+      socket.addEventListener('error', () => !disposed && terminal.writeln('\r\n\x1b[31m[terminal connection failed]\x1b[0m'))
+      const input = terminal.onData((data) => socket?.readyState === WebSocket.OPEN && socket.send(data))
+      return () => {
+        disposed = true
+        observer.disconnect()
+        input.dispose()
+        socket?.close()
+        terminal.element?.remove()
+        window.setTimeout(() => terminal.dispose(), 250)
+      }
+    }
+
+    const prompt = () => terminal.write(`\x1b[32moperator@${server.label.toLowerCase()}\x1b[0m:\x1b[34m~\x1b[0m$ `)
+    terminal.writeln(`Back to the Feature // ${server.ip} // local simulation`)
+    terminal.writeln("Type 'help' to list the available investigation commands.\r\n")
 
     if (!server.shell) {
       terminal.writeln('\x1b[31mACCESS DENIED: this node is outside the player trust boundary.\x1b[0m')
     } else {
-      terminal.write(`\x1b[32moperator@${server.label.toLowerCase()}\x1b[0m:\x1b[34m~\x1b[0m$ `)
+      prompt()
+    }
+
+    const tokenize = (command: string) => command.match(/"[^"]*"|'[^']*'|\S+/g)?.map((part) => part.replace(/^['"]|['"]$/g, '')) ?? []
+    const output = (lines: string[]) => {
+      terminal.writeln('')
+      lines.forEach((value) => terminal.writeln(value))
+      terminal.writeln('')
+    }
+    const help = (name?: string) => {
+      if (name) {
+        const entry = helpEntries.find(([usage]) => usage.split(' ')[0] === name)
+        return entry
+          ? output([`\x1b[36m${entry[0]}\x1b[0m`, `  引数: ${entry[1]}`, `  説明: ${entry[2]}`])
+          : output([`help: '${name}' は登録されていません`])
+      }
+      output([
+        `\x1b[36mBACK TO THE FEATURE - INVESTIGATION COMMANDS (${helpEntries.length})\x1b[0m`,
+        '',
+        'COMMAND                       ARGUMENTS                         DESCRIPTION',
+        ...helpEntries.map(([usage, args, description]) => `${usage.padEnd(29)} ${args.padEnd(33)} ${description}`),
+        '',
+        '例: ls  |  cat README.md  |  config get rate_limit.conf',
+      ])
     }
 
     let line = ''
+    const fileOverrides = new Map<string, string>()
+    const workspaceFiles = () => ({
+      ...createTerminalFiles(stage, server, settingsRef.current),
+      ...Object.fromEntries(fileOverrides),
+    })
     const run = (raw: string) => {
-      const command = raw.trim()
-      if (!command) return
-      if (command === 'clear') {
+      const [name = '', ...args] = tokenize(raw.trim())
+      if (!name) return
+      if (name === 'clear') {
         terminal.clear()
         return
       }
-      if (command === 'help') {
-        terminal.writeln('help  hostname  whoami  status  ss -lnt  ps  inspect  tail auth.log  clear')
-      } else if (command === 'hostname') {
-        terminal.writeln(server.label.toLowerCase())
-      } else if (command === 'whoami') {
-        terminal.writeln('operator')
-      } else if (command === 'status') {
-        terminal.writeln(`state=running  ip=${server.ip}  services=${server.services.join(',')}`)
-      } else if (command === 'ss -lnt' || command === 'ss') {
-        terminal.writeln('State   Local Address:Port   Process')
-        server.ports.forEach((port) => terminal.writeln(`LISTEN  0.0.0.0:${port}          ${server.services[0] ?? 'service'}`))
-      } else if (command === 'ps') {
-        terminal.writeln('PID  USER      COMMAND')
-        server.services.forEach((service, index) => terminal.writeln(`${118 + index}  service   ${service}`))
-      } else if (command === 'inspect') {
-        const applied = stage.defenses
-          .filter((defense) => defense.serverId === server.id && settingsRef.current[defense.id])
-          .map((defense) => defense.label)
-        terminal.writeln(`active defenses: ${applied.length ? applied.join(', ') : 'none'}`)
-      } else if (command === 'tail auth.log' || command.startsWith('tail ')) {
-        terminal.writeln('Aug 31 02:14:12 request source=external status=401')
-        terminal.writeln('Aug 31 02:14:28 policy evaluation completed result=allow')
-        terminal.writeln('Aug 31 02:14:29 \x1b[33msuspicious session transition detected\x1b[0m')
+      if (name === 'help') {
+        help(args[0])
+      } else if (name === 'hostname') {
+        output([server.label.toLowerCase()])
+      } else if (name === 'whoami') {
+        output(['operator (uid=10001, non-root)'])
+      } else if (name === 'status') {
+        if (args[0] === '--json') output([JSON.stringify({ node: server.id, stage: stage.id, health: 'healthy', mode: 'simulation' }, null, 2)])
+        else output([`NODE      ${server.label}`, `ADDRESS   ${server.ip}`, 'HEALTH    healthy', `SERVICES  ${server.services.join(', ')}`])
+      } else if (name === 'services') {
+        output(['SERVICE              PID       STATE', ...server.services.map((service, index) => `${service.padEnd(20)} ${String(118 + index).padEnd(9)} running`)])
+      } else if (name === 'ports') {
+        output(['STATE    LOCAL ADDRESS           PROCESS', ...server.ports.map((port, index) => `LISTEN   0.0.0.0:${String(port).padEnd(14)} ${server.services[index] ?? server.services[0] ?? 'service'}`)])
+      } else if (name === 'ps') {
+        output(['PID   USER       CPU   MEM   COMMAND', ...server.services.map((service, index) => `${String(118 + index).padEnd(5)} service    0.${index + 1}   1.${index + 2}   ${service}`)])
+      } else if (name === 'logs' || name === 'tail') {
+        const requested = Number(args[args.indexOf('--lines') + 1])
+        const count = Number.isFinite(requested) ? Math.min(200, Math.max(1, requested)) : 20
+        output([`[${server.label}] last ${count} lines`, 'Aug 31 02:14:12 request source=external status=401', 'Aug 31 02:14:28 policy evaluation completed result=allow', 'Aug 31 02:14:29 \x1b[33msuspicious session transition detected\x1b[0m'])
+      } else if (name === 'inspect') {
+        const applied = stage.defenses.filter((defense) => defense.serverId === server.id && settingsRef.current[defense.id]).map((defense) => defense.label)
+        output([`SECTION    ${args[0] ?? 'all'}`, 'NETWORK    isolated / simulated egress denied', 'ROOTFS     read-only base + writable workspace', `DEFENSES   ${applied.length ? applied.join(', ') : 'none'}`])
+      } else if (name === 'ls') {
+        const requested = args.find((arg) => !arg.startsWith('-')) ?? '.'
+        const path = normalizeWorkspacePath(requested)
+        const files = workspaceFiles()
+        if (path === null) output([`ls: '${requested}': workspace外は参照できません`])
+        else if (path && files[path]) output([path])
+        else if (path) output([`ls: '${requested}': ファイルまたはディレクトリがありません`])
+        else if (args.some((arg) => arg.includes('l'))) {
+          output(Object.entries(files).map(([filename, contents]) => `-rw-r--r--  1 operator  operator  ${String(contents.length).padStart(6)}  ${filename}`))
+        } else output([Object.keys(files).join('  ')])
+      } else if (name === 'cat') {
+        const path = normalizeWorkspacePath(args[0])
+        const files = workspaceFiles()
+        if (!args[0]) output(['usage: cat PATH'])
+        else if (path === null) output([`cat: '${args[0]}': workspace外は参照できません`])
+        else if (!path || !(path in files)) output([`cat: '${args[0]}': ファイルがありません`])
+        else output(files[path].replace(/\n$/, '').split('\n'))
+      } else if (name === 'config') {
+        const [action, requestedPath, ...valueParts] = args
+        const path = normalizeWorkspacePath(requestedPath)
+        const files = workspaceFiles()
+        if (!['get', 'set'].includes(action) || !requestedPath) output(['usage: config get|set PATH [VALUE]'])
+        else if (path === null) output(['config: PATH must remain below workspace'])
+        else if (!path || !(path in files)) output([`config: '${requestedPath}' は見つかりません`])
+        else if (action === 'get') output([`${path}:`, ...files[path].replace(/\n$/, '').split('\n')])
+        else {
+          const assignment = files[path].match(/^([a-z][a-z0-9_]*)=(.*)$/m)
+          const supplied = valueParts.join(' ').trim()
+          if (!assignment || !supplied) output([`usage: config set ${path} ${assignment?.[1] ?? 'KEY'}=VALUE`])
+          else {
+            const key = assignment[1]
+            const value = supplied.startsWith(`${key}=`) ? supplied.slice(key.length + 1) : supplied
+            fileOverrides.set(path, files[path].replace(new RegExp(`^${key}=.*$`, 'm'), `${key}=${value}`))
+            output([`updated ${path}: ${key}=${value}`, 'GUIの防御設定は右側パネルの「設定を適用」から変更してください'])
+          }
+        }
       } else {
-        terminal.writeln(`zsh: command not found: ${command}`)
+        output([`command not found: ${name}`, "利用可能なコマンドは 'help' で確認できます"])
       }
     }
 
     const disposable = terminal.onData((data) => {
       if (!server.shell) return
       if (data === '\r') {
+        terminal.write('\r\n')
         run(line)
         line = ''
         prompt()
@@ -101,20 +229,22 @@ export function TerminalPanel({ server, stage, settings }: TerminalPanelProps) {
         }
       } else if (data === '\u000c') {
         terminal.clear()
+        line = ''
+        prompt()
       } else if (data >= ' ') {
         line += data
         terminal.write(data)
       }
     })
 
-    const observer = new ResizeObserver(() => fit.fit())
-    observer.observe(mountRef.current)
     return () => {
+      disposed = true
       observer.disconnect()
       disposable.dispose()
-      terminal.dispose()
+      terminal.element?.remove()
+      window.setTimeout(() => terminal.dispose(), 250)
     }
-  }, [server, stage])
+  }, [connection, server, stage])
 
   return <div ref={mountRef} className="terminal-mount" aria-label={`${server.label} terminal`} />
 }
