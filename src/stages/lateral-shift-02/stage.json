@@ -1,0 +1,44 @@
+{
+  "id": "lateral-shift-02",
+  "number": "02",
+  "title": "境界線の向こう側",
+  "codename": "LATERAL SHIFT",
+  "description": "踏み台サーバーを経由した横展開。ネットワーク境界を再設計し、機密DBを守れ。",
+  "difficulty": 2,
+  "category": ["NETWORK", "SSRF"],
+  "estimatedMinutes": 12,
+  "accent": "#21c7a8",
+  "evaluation": "single_path",
+  "briefing": "公開APIの監視に、内部アドレスへの大量リクエストが残っている。同時刻に踏み台サーバーへのSSH試行も急増した。二つの侵入経路を洗い出し、分析基盤を止めずに保護してほしい。",
+  "objective": "内部分析DBへの到達を遮断し、公開APIを維持する",
+  "infra": {
+    "servers": [
+      { "id": "attacker", "label": "UNKNOWN", "role": "外部ホスト", "ip": "203.0.113.77", "status": "restricted", "services": ["attack runner"], "ports": [], "shell": false, "position": { "x": 8, "y": 48 } },
+      { "id": "bastion", "label": "BASTION-01", "role": "踏み台", "ip": "10.20.0.4", "status": "online", "services": ["sshd", "fail2ban"], "ports": [22], "shell": true, "position": { "x": 34, "y": 25 } },
+      { "id": "api", "label": "API-01", "role": "公開API", "ip": "10.20.1.9", "status": "online", "services": ["caddy", "go-api"], "ports": [443, 8080], "shell": true, "position": { "x": 34, "y": 70 } },
+      { "id": "analytics", "label": "DATA-01", "role": "分析DB", "ip": "10.20.2.14", "status": "online", "services": ["clickhouse"], "ports": [8123, 9000], "shell": true, "position": { "x": 78, "y": 48 } }
+    ],
+    "connections": [
+      { "from": "attacker", "to": "bastion", "label": "SSH" },
+      { "from": "attacker", "to": "api", "label": "HTTPS" },
+      { "from": "bastion", "to": "analytics", "label": "MGMT" },
+      { "from": "api", "to": "analytics", "label": "DATA" }
+    ]
+  },
+  "checkpoints": [
+    { "id": "cp0", "time": 0, "label": "平常稼働" },
+    { "id": "cp1", "time": 16, "label": "SSH試行前" },
+    { "id": "cp2", "time": 34, "label": "横展開前" }
+  ],
+  "defenses": [
+    { "id": "ssh_keys_only", "serverId": "bastion", "label": "SSH鍵認証のみ", "description": "パスワード認証とrootログインを禁止", "onLabel": "鍵認証", "offLabel": "パスワード可", "default": false, "configPath": "/etc/ssh/sshd_config" },
+    { "id": "ssrf_allowlist", "serverId": "api", "label": "URL宛先Allowlist", "description": "プロキシ機能の接続先を承認済みFQDNに限定", "onLabel": "限定", "offLabel": "任意URL", "default": false, "configPath": "/app/config/egress.yaml" },
+    { "id": "segment_data", "serverId": "analytics", "label": "データ層セグメント", "description": "接続元を集計ワーカーのみに限定", "onLabel": "隔離", "offLabel": "共有NW", "default": false, "configPath": "/etc/nftables.d/data.nft" },
+    { "id": "service_online", "serverId": "api", "label": "公開API", "description": "外部ヘルスチェック", "onLabel": "稼働", "offLabel": "停止", "default": true, "configPath": "service://go-api" }
+  ],
+  "availability_checks": [
+    { "id": "operator-ssh", "settingId": "service_online", "label": "承認済み運用者が鍵認証で接続", "target": "bastion", "entrypoint": "SSH publickey", "expect": true, "failureStatus": "DOWN" },
+    { "id": "public-api", "settingId": "service_online", "label": "正規URLのプロキシ応答を検証", "target": "api", "entrypoint": "GET /proxy", "expect": true, "failureStatus": "MUMBLE" },
+    { "id": "analytics-query", "settingId": "service_online", "label": "集計ワーカーから分析クエリ成功", "target": "analytics", "entrypoint": "POST /?query", "expect": true, "failureStatus": "CORRUPT" }
+  ]
+}
