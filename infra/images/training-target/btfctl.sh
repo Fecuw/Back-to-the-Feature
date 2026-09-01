@@ -8,21 +8,21 @@ print_help() {
 
 BACK TO THE FEATURE - INVESTIGATION COMMANDS (12)
 
-COMMAND                      ARGUMENTS                         DESCRIPTION
-help [command]               command: optional                Show all commands or one detailed entry
-hostname                     none                              Print the current container hostname
-whoami                       none                              Print the non-root session user
-status [--json]              --json: machine-readable output  Show node, stage, uptime and health
-services [--all]             --all: include helper processes  List services running in this node
-ports [--listen]             --listen: listening sockets only Show TCP listeners and owning processes
-ps [--sort cpu|mem]          --sort: cpu or memory             Show the process table with optional sorting
-logs [service] [--lines N]   service; N: 1-200                Read recent isolated service logs
-inspect [defense|network]    section: optional                Inspect applied defenses or network scope
-ls [path]                    path: optional                   List README and configuration files
-cat PATH                     workspace file                  Read a README or configuration file
-config get|set PATH [VALUE]  action, workspace path, value    Read or edit files below /workspace only
+COMMAND                                  ARGUMENTS                         DESCRIPTION
+help [command]                           command: optional                Show all commands or one detailed entry
+hostname                                 none                              Print the current container hostname
+whoami                                   none                              Print the non-root session user
+status [--json]                          --json: machine-readable output  Show node, stage, uptime and health
+services [--all]                         --all: include helper processes  List services running in this node
+ports [--listen]                         --listen: listening sockets only Show TCP listeners and owning processes
+ps [--sort cpu|mem]                      --sort: cpu or memory             Show the process table with optional sorting
+logs [service] [--lines N]               service; N: 1-200                Read recent isolated service logs
+inspect [defense|network]                section: optional                Inspect applied defenses or network scope
+ls [path]                                path: optional                   List README and configuration files
+cat PATH                                 workspace file                  Read a README or configuration file
+config get PATH | config set PATH KEY on|off                              Read or immediately apply a defense setting
 
-Examples: ls | cat README.md | config get rate_limit.conf
+Example: config set rate_limit.conf rate_limit on
 
 EOF
 }
@@ -32,7 +32,7 @@ case "$command_name" in
     if [[ ${1:-} == "logs" ]]; then
       printf '\nlogs [service] [--lines N]\n  Reads 1-200 recent lines. service defaults to the current node.\n\n'
     elif [[ ${1:-} == "config" ]]; then
-      printf '\nconfig get|set PATH [VALUE]\n  PATH is resolved below /workspace. Parent traversal is rejected.\n\n'
+      printf '\nconfig get PATH | config set PATH KEY on|off\n  PATH is resolved below /workspace. KEY must match the setting in that file.\n\n'
     else
       print_help
     fi
@@ -73,21 +73,24 @@ case "$command_name" in
   config)
     action=${1:-}
     path=${2:-}
-    if [[ -z $path || $path == /* || $path == *..* ]]; then printf '\nusage: config get|set PATH [VALUE]\n\n'; exit 2; fi
+    if [[ -z $path || $path == /* || $path == *..* ]]; then printf '\nusage: config get PATH | config set PATH KEY on|off\n\n'; exit 2; fi
     target="/workspace/$path"
     if [[ $action == "get" ]]; then
       printf '\n'; cat "$target" 2>/dev/null || printf 'config: %s not found\n' "$path"; printf '\n'
     elif [[ $action == "set" ]]; then
       if [[ ! -f $target || $path != *.conf ]]; then printf '\nconfig: %s is not an editable configuration file\n\n' "$path"; exit 2; fi
-      key="$(awk -F= '!/^#/ && NF == 2 { print $1; exit }' "$target")"
-      supplied="${*:3}"
-      [[ $supplied == "$key="* ]] && supplied="${supplied#*=}"
-      if [[ -z $key || -z $supplied ]]; then printf '\nusage: config set %s %s=VALUE\n\n' "$path" "${key:-KEY}"; exit 2; fi
-      awk -v key="$key" -v value="$supplied" 'index($0, key "=") == 1 { print key "=" value; next } { print }' "$target" > "$target.tmp"
+      expected_key="$(awk -F= '!/^#/ && NF == 2 { print $1; exit }' "$target")"
+      supplied_key=${3:-}
+      value=${4:-}
+      if [[ -z $expected_key || -z $supplied_key || -z $value || $# -ne 4 ]]; then printf '\nusage: config set %s %s on|off\n\n' "$path" "${expected_key:-KEY}"; exit 2; fi
+      if [[ $path != "$expected_key.conf" ]]; then printf '\nconfig: %s is not an editable defense setting\n\n' "$path"; exit 2; fi
+      if [[ $supplied_key != "$expected_key" ]]; then printf "\nconfig: '%s' is not the setting in %s (expected: %s)\n\n" "$supplied_key" "$path" "$expected_key"; exit 2; fi
+      if [[ $value != "on" && $value != "off" ]]; then printf '\nconfig: VALUE must be on or off\n\n'; exit 2; fi
+      awk -v key="$expected_key" -v value="$value" 'index($0, key "=") == 1 { print key "=" value; next } { print }' "$target" > "$target.tmp"
       mv "$target.tmp" "$target"
-      printf '\nupdated %s: %s=%s\ncomments preserved; use the GUI to apply game defenses\n\n' "$path" "$key" "$supplied"
+      printf '\nupdated %s: %s=%s\n\n' "$path" "$expected_key" "$value"
     else
-      printf '\nusage: config get|set PATH [VALUE]\n\n'; exit 2
+      printf '\nusage: config get PATH | config set PATH KEY on|off\n\n'; exit 2
     fi
     ;;
   *)

@@ -54,7 +54,7 @@ done < <(jq -r '.[] | @base64' "$settings_json")
       printf '| `%s.conf` | `%s` | %s | `%s` |\n' "$id" "$id" "$description" "$config_path"
     done < <(jq -r '.[] | @base64' "$settings_json")
   fi
-  printf '\n> シェル内の編集は調査用ワークスペースだけに反映されます。ゲームの防御設定は右側パネルの「設定を適用」で変更してください。\n'
+  printf '\n> 対策フェーズでは `config set <file> <setting> on|off` で防御設定をゲームへ即時反映できます。\n'
 } > /workspace/README.md
 
 printf '%s service started at %s\n' "${BTF_SERVER_LABEL:-training-node}" "$(date -u +%FT%TZ)" > /workspace/service.log

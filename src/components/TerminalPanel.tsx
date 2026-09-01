@@ -15,6 +15,7 @@ interface TerminalPanelProps {
   stage: LoadedStage
   settings: Record<string, boolean>
   connection?: LiveTerminalConnection
+  onConfigChange: (serverId: string, settingId: string, value: boolean) => { ok: boolean; message?: string }
 }
 
 const helpEntries = [
@@ -29,7 +30,7 @@ const helpEntries = [
   ['inspect [defense|network]', 'section: optional', '防御設定またはネットワーク境界を調査'],
   ['ls [path]', 'path: optional', 'workspace内のREADMEと設定ファイルを一覧表示'],
   ['cat PATH', 'workspace file', 'READMEまたは設定ファイルの内容を表示'],
-  ['config get|set PATH [VALUE]', 'action; workspace path; value', 'workspace内の設定を読み書き'],
+  ['config get PATH | config set PATH KEY on|off', 'path; setting name; on/off', '設定表示、または防御設定を即時反映'],
 ] as const
 
 function normalizeWorkspacePath(path = '.') {
@@ -39,10 +40,12 @@ function normalizeWorkspacePath(path = '.') {
   return normalized.startsWith('/') || normalized.includes('/') ? null : normalized
 }
 
-export function TerminalPanel({ server, stage, settings, connection }: TerminalPanelProps) {
+export function TerminalPanel({ server, stage, settings, connection, onConfigChange }: TerminalPanelProps) {
   const mountRef = useRef<HTMLDivElement>(null)
   const settingsRef = useRef(settings)
+  const onConfigChangeRef = useRef(onConfigChange)
   settingsRef.current = settings
+  onConfigChangeRef.current = onConfigChange
 
   useEffect(() => {
     if (!mountRef.current) return
@@ -81,6 +84,8 @@ export function TerminalPanel({ server, stage, settings, connection }: TerminalP
       terminal.writeln(`Back to the Feature // connecting ${server.label} ...`)
       socket = new WebSocket(terminalSocketUrl(connection.sessionId, server.id), ['btf-terminal', connection.accessToken])
       socket.binaryType = 'arraybuffer'
+      const decoder = new TextDecoder()
+      let liveOutputBuffer = ''
       socket.addEventListener('open', () => {
         if (disposed) return
         resize()
@@ -88,7 +93,21 @@ export function TerminalPanel({ server, stage, settings, connection }: TerminalP
       })
       socket.addEventListener('message', (event) => {
         if (disposed) return
-        terminal.write(typeof event.data === 'string' ? event.data : new Uint8Array(event.data as ArrayBuffer))
+        const chunk = typeof event.data === 'string'
+          ? event.data
+          : decoder.decode(new Uint8Array(event.data as ArrayBuffer), { stream: true })
+        terminal.write(chunk)
+        liveOutputBuffer = (liveOutputBuffer + chunk).slice(-4096)
+        const lines = liveOutputBuffer.split(/\r?\n/)
+        liveOutputBuffer = lines.pop() ?? ''
+        for (const line of lines) {
+          const updated = line.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').trim().match(/^updated (\S+): ([a-z][a-z0-9_]*)=(on|off)$/)
+          if (!updated) continue
+          const defense = stage.defenses.find((item) => item.serverId === server.id && `${item.id}.conf` === updated[1] && item.id === updated[2])
+          if (!defense) continue
+          const result = onConfigChangeRef.current(server.id, defense.id, updated[3] === 'on')
+          if (!result.ok && result.message) terminal.writeln(`\r\n\x1b[31m${result.message}\x1b[0m`)
+        }
       })
       socket.addEventListener('close', (event) => {
         if (disposed) return
@@ -135,16 +154,12 @@ export function TerminalPanel({ server, stage, settings, connection }: TerminalP
         'COMMAND                       ARGUMENTS                         DESCRIPTION',
         ...helpEntries.map(([usage, args, description]) => `${usage.padEnd(29)} ${args.padEnd(33)} ${description}`),
         '',
-        '例: ls  |  cat README.md  |  config get rate_limit.conf',
+        '例: config get rate_limit.conf  |  config set rate_limit.conf rate_limit on',
       ])
     }
 
     let line = ''
-    const fileOverrides = new Map<string, string>()
-    const workspaceFiles = () => ({
-      ...createTerminalFiles(stage, server, settingsRef.current),
-      ...Object.fromEntries(fileOverrides),
-    })
+    const workspaceFiles = () => createTerminalFiles(stage, server, settingsRef.current)
     const run = (raw: string) => {
       const [name = '', ...args] = tokenize(raw.trim())
       if (!name) return
@@ -195,19 +210,22 @@ export function TerminalPanel({ server, stage, settings, connection }: TerminalP
         const [action, requestedPath, ...valueParts] = args
         const path = normalizeWorkspacePath(requestedPath)
         const files = workspaceFiles()
-        if (!['get', 'set'].includes(action) || !requestedPath) output(['usage: config get|set PATH [VALUE]'])
+        if (!['get', 'set'].includes(action) || !requestedPath) output(['usage: config get PATH | config set PATH KEY on|off'])
         else if (path === null) output(['config: PATH must remain below workspace'])
         else if (!path || !(path in files)) output([`config: '${requestedPath}' は見つかりません`])
         else if (action === 'get') output([`${path}:`, ...files[path].replace(/\n$/, '').split('\n')])
         else {
           const assignment = files[path].match(/^([a-z][a-z0-9_]*)=(.*)$/m)
-          const supplied = valueParts.join(' ').trim()
-          if (!assignment || !supplied) output([`usage: config set ${path} ${assignment?.[1] ?? 'KEY'}=VALUE`])
+          const [suppliedKey, value, ...extra] = valueParts
+          const key = assignment?.[1]
+          const defense = stage.defenses.find((item) => item.serverId === server.id && `${item.id}.conf` === path)
+          if (!assignment || !suppliedKey || !value || extra.length) output([`usage: config set ${path} ${key ?? 'KEY'} on|off`])
+          else if (!defense || key !== defense.id) output([`config: '${path}' は変更可能な防御設定ではありません`])
+          else if (suppliedKey !== key) output([`config: '${suppliedKey}' は ${path} の設定名ではありません（expected: ${key}）`])
+          else if (!['on', 'off'].includes(value)) output([`config: VALUE は on または off を指定してください`])
           else {
-            const key = assignment[1]
-            const value = supplied.startsWith(`${key}=`) ? supplied.slice(key.length + 1) : supplied
-            fileOverrides.set(path, files[path].replace(new RegExp(`^${key}=.*$`, 'm'), `${key}=${value}`))
-            output([`updated ${path}: ${key}=${value}`, 'GUIの防御設定は右側パネルの「設定を適用」から変更してください'])
+            const result = onConfigChangeRef.current(server.id, defense.id, value === 'on')
+            output(result.ok ? [`updated ${path}: ${key}=${value}`] : [result.message ?? 'config: 設定を変更できませんでした'])
           }
         }
       } else {

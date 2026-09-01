@@ -47,7 +47,7 @@ export function createTerminalFiles(
     '| `session.conf` | `stage_id`, `server_id`, `mode` | 接続中セッションの識別情報 | runtime |',
     ...rows,
     '',
-    '> シェル内の編集は調査用ワークスペースだけに反映されます。ゲームの防御設定は右側パネルの「設定を適用」で変更してください。',
+    '> 対策フェーズでは `config set <file> <setting> on|off` で防御設定をゲームへ即時反映できます。',
     '',
   ].join('\n')
 

@@ -15,14 +15,12 @@ import {
   History,
   KeyRound,
   Lightbulb,
-  LockKeyhole,
   LogOut,
   Network,
   Play,
   RotateCcw,
   Search,
   Server,
-  Settings2,
   Shield,
   ShieldAlert,
   TerminalSquare,
@@ -36,7 +34,6 @@ import { stages } from './stages/loader'
 import { useProgress } from './store'
 import type {
   AttackResult,
-  DefenseDefinition,
   LoadedStage,
   LogEntry,
   Phase,
@@ -217,11 +214,9 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
   const [terminalServerId, setTerminalServerId] = useState(stage.infra.servers.find((server) => server.shell)?.id ?? stage.infra.servers[0].id)
   const [selectedCheckpoint, setSelectedCheckpoint] = useState(stage.checkpoints[0].id)
   const [settings, setSettings] = useState(defaultSettings)
-  const [draft, setDraft] = useState(defaultSettings)
   const [results, setResults] = useState<AttackResult[]>([])
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [playhead, setPlayhead] = useState(0)
-  const [rightTab, setRightTab] = useState<'details' | 'defense'>('details')
   const [consoleTab, setConsoleTab] = useState<'logs' | 'terminal'>('logs')
   const [logQuery, setLogQuery] = useState('')
   const [logServer, setLogServer] = useState('all')
@@ -248,7 +243,6 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
   const terminalServer = terminalServers.find((server) => server.id === terminalServerId) ?? terminalServers[0] ?? stage.infra.servers[0]
   const maxTime = Math.max(...Object.values(stage.scenario.nodes).map((node) => node.time), 60)
   const observed = phase !== 'INITIALIZING' && results.length > 0
-  const changes = stage.defenses.filter((defense) => draft[defense.id] !== settings[defense.id])
 
   const maximumConsoleHeight = () => {
     const shellHeight = gameShellRef.current?.getBoundingClientRect().height ?? window.innerHeight
@@ -316,16 +310,24 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
     const checkpoint = stage.checkpoints.find((item) => item.id === selectedCheckpoint)!
     setPhase('EDITING')
     setPlayhead(checkpoint.time)
-    setDraft(settings)
-    setRightTab('defense')
+    setConsoleTab('terminal')
     setLogs((current) => [{ id: `rewind-${Date.now()}`, time: `00:${String(checkpoint.time).padStart(2, '0')}`, server: 'system', level: 'INFO', message: `snapshot restored: ${checkpoint.id} / ${checkpoint.label}` }, ...current])
   }
 
-  const applySettings = () => {
-    if (!changes.length) return
-    const changedLabels = changes.map((item) => item.label).join(', ')
-    setSettings(draft)
-    setLogs((current) => [{ id: `config-${Date.now()}`, time: `00:${String(playhead).padStart(2, '0')}`, server: selectedServer.id, level: 'INFO', message: `configuration applied: ${changedLabels}` }, ...current])
+  const changeSettingFromTerminal = (serverId: string, settingId: string, value: boolean) => {
+    const defense = stage.defenses.find((item) => item.serverId === serverId && item.id === settingId)
+    if (!defense) return { ok: false, message: `config: '${settingId}' はこのノードの防御設定ではありません` }
+    if (phase !== 'EDITING') return { ok: false, message: 'config: 設定変更は対策フェーズでのみ実行できます。先に「過去へ戻る」を実行してください' }
+
+    setSettings((current) => ({ ...current, [settingId]: value }))
+    setLogs((current) => [{
+      id: `config-${Date.now()}-${settingId}`,
+      time: `00:${String(playhead).padStart(2, '0')}`,
+      server: serverId,
+      level: 'INFO',
+      message: `configuration updated from terminal: ${defense.label}=${value ? 'on' : 'off'}`,
+    }, ...current])
+    return { ok: true }
   }
 
   const simulate = () => {
@@ -395,7 +397,7 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
         onSelectCheckpoint={setSelectedCheckpoint}
         onRewind={rewind}
         onSimulate={simulate}
-        canSimulate={phase === 'EDITING' && changes.length === 0}
+        canSimulate={phase === 'EDITING'}
       />
 
       <main className="workspace">
@@ -413,24 +415,7 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
             <div><span>{selectedServer.role}</span><h2>{selectedServer.label}</h2><code>{selectedServer.ip}</code></div>
             <span className="online-label"><i /> ONLINE</span>
           </div>
-          <div className="tab-list compact-tabs">
-            <button className={rightTab === 'details' ? 'active' : ''} onClick={() => setRightTab('details')}>詳細</button>
-            <button className={rightTab === 'defense' ? 'active' : ''} onClick={() => setRightTab('defense')}>防御設定</button>
-          </div>
-          {rightTab === 'details' ? (
-            <ServerDetails stage={stage} server={selectedServer} settings={settings} />
-          ) : (
-            <DefenseSettings
-              stage={stage}
-              server={selectedServer}
-              phase={phase}
-              settings={settings}
-              draft={draft}
-              onChange={(id, value) => setDraft((current) => ({ ...current, [id]: value }))}
-              onApply={applySettings}
-              changes={changes}
-            />
-          )}
+          <ServerDetails stage={stage} server={selectedServer} settings={settings} />
         </aside>
       </main>
 
@@ -482,7 +467,7 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
           )}
         </div>
         <div className="console-body">
-          {consoleTab === 'logs' ? <LogViewer logs={filteredLogs} loading={phase === 'INITIALIZING'} /> : <TerminalPanel server={terminalServer} stage={stage} settings={settings} connection={runtime.status === 'live' && runtime.sessionId && runtime.accessToken ? { sessionId: runtime.sessionId, accessToken: runtime.accessToken } : undefined} />}
+          {consoleTab === 'logs' ? <LogViewer logs={filteredLogs} loading={phase === 'INITIALIZING'} /> : <TerminalPanel server={terminalServer} stage={stage} settings={settings} onConfigChange={changeSettingFromTerminal} connection={runtime.status === 'live' && runtime.sessionId && runtime.accessToken ? { sessionId: runtime.sessionId, accessToken: runtime.accessToken } : undefined} />}
         </div>
       </section>
 
@@ -612,38 +597,6 @@ function ServerDetails({ stage, server, settings }: { stage: LoadedStage; server
       </dl>
       <div className="detail-section"><h3>SERVICES</h3>{server.services.map((service, index) => <div className="service-row" key={service}><Activity size={14} /><strong>{service}</strong><span>RUNNING</span><code>{server.ports[index] ? `:${server.ports[index]}` : 'internal'}</code></div>)}</div>
       <div className="detail-section"><h3>APPLIED DEFENSES</h3>{defenses.length ? defenses.map((defense) => <div className="applied-row" key={defense.id}><span className={settings[defense.id] ? 'enabled' : ''}>{settings[defense.id] ? <Check size={13} /> : <X size={13} />}</span><div><strong>{defense.label}</strong><small>{settings[defense.id] ? defense.onLabel : defense.offLabel}</small></div></div>) : <p className="empty-copy">編集可能な設定はありません。</p>}</div>
-    </div>
-  )
-}
-
-function DefenseSettings({
-  stage, server, phase, settings, draft, onChange, onApply, changes,
-}: {
-  stage: LoadedStage; server: ServerDefinition; phase: Phase; settings: Record<string, boolean>; draft: Record<string, boolean>
-  onChange: (id: string, value: boolean) => void; onApply: () => void; changes: DefenseDefinition[]
-}) {
-  const defenses = stage.defenses.filter((defense) => defense.serverId === server.id)
-  const editable = phase === 'EDITING'
-  return (
-    <div className="defense-settings">
-      {!editable && <div className="edit-lock"><LockKeyhole size={15} /><span>設定スナップショットは読み取り専用です</span></div>}
-      <div className="defense-list scroll-area">
-        {defenses.map((defense) => (
-          <label className={`defense-control ${!editable ? 'disabled' : ''}`} key={defense.id}>
-            <div className="defense-control-copy"><strong>{defense.label}</strong><p>{defense.description}</p><code>{defense.configPath}</code></div>
-            <input type="checkbox" checked={draft[defense.id]} disabled={!editable} onChange={(event) => onChange(defense.id, event.target.checked)} />
-            <span className="toggle"><i /></span>
-            <small className={draft[defense.id] ? 'on' : ''}>{draft[defense.id] ? defense.onLabel : defense.offLabel}</small>
-          </label>
-        ))}
-        {!defenses.length && <div className="empty-state"><ShieldAlert size={24} /><strong>編集対象外ノード</strong><p>このノードに変更可能な防御設定はありません。</p></div>}
-      </div>
-      {editable && (
-        <div className="change-footer">
-          <div><span>差分</span><strong>{changes.length ? `${changes.length}件の未適用変更` : '適用済み'}</strong></div>
-          <button className="apply-button" disabled={!changes.length} onClick={onApply}><Check size={15} /> 設定を適用</button>
-        </div>
-      )}
     </div>
   )
 }

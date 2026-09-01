@@ -3,4 +3,4 @@ export HISTFILE=/workspace/.shell_history
 export HISTSIZE=200
 help() { command /usr/local/bin/help "$@"; }
 printf '\nBack to the Feature // %s // isolated session\n' "${BTF_SERVER_LABEL:-training-node}"
-printf "Type 'help' to list the ten investigation commands.\n\n"
+printf "Type 'help' to list the twelve investigation commands.\n\n"

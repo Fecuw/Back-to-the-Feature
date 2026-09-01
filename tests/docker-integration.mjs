@@ -60,7 +60,7 @@ try {
   })
   sessionId = session.id
 
-  const gatewayHelp = stripAnsi(await terminalCommand('gateway', 'help', 'config get|set PATH'))
+  const gatewayHelp = stripAnsi(await terminalCommand('gateway', 'help', 'config set PATH KEY on|off'))
   const expectedCommands = [
     'help [command]',
     'hostname',
@@ -73,7 +73,7 @@ try {
     'inspect [defense|network]',
     'ls [path]',
     'cat PATH',
-    'config get|set PATH [VALUE]',
+    'config get PATH | config set PATH KEY on|off',
   ]
   if (!gatewayHelp.includes('INVESTIGATION COMMANDS (12)') || !expectedCommands.every((command) => gatewayHelp.includes(command))) {
     throw new Error('container help is missing its twelve command usages')
@@ -83,6 +83,12 @@ try {
   if (!gatewayFiles.includes('README.md') || !gatewayFiles.includes('session.conf')) throw new Error('container workspace does not list its README and session settings')
   const rateLimitConfig = stripAnsi(await terminalCommand('gateway', 'cat rate_limit.conf', 'rate_limit=off'))
   if (!rateLimitConfig.includes('# rate_limit:') || !rateLimitConfig.includes('# source:')) throw new Error('setting file is missing inline role comments')
+  const rateLimitUpdate = stripAnsi(await terminalCommand('gateway', 'config set rate_limit.conf rate_limit on', 'updated rate_limit.conf: rate_limit=on'))
+  if (!rateLimitUpdate.includes('rate_limit=on')) throw new Error('config set did not accept separate path, setting name, and on/off value')
+  const invalidKey = stripAnsi(await terminalCommand('gateway', 'config set rate_limit.conf ssh_keys_only off', 'expected: rate_limit'))
+  if (!invalidKey.includes('expected: rate_limit')) throw new Error('config set accepted a setting name that does not match the path')
+  const invalidValue = stripAnsi(await terminalCommand('gateway', 'config set rate_limit.conf rate_limit enabled', 'VALUE must be on or off'))
+  if (!invalidValue.includes('VALUE must be on or off')) throw new Error('config set accepted a value other than on/off')
   const workspaceReadme = stripAnsi(await terminalCommand('gateway', 'cat README.md', 'rate_limit.conf'))
   if (!workspaceReadme.includes('格納する設定') || !workspaceReadme.includes('/etc/nginx/conf.d/auth.conf')) throw new Error('workspace README is missing its file-to-setting map')
 

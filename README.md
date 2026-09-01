@@ -47,11 +47,12 @@ ls
 cat README.md
 cat rate_limit.conf
 config get rate_limit.conf
+config set rate_limit.conf rate_limit on
 ```
 
 `README.md` は「どのファイルがどの設定を格納するか」を表で示します。`session.conf` はステージ／ノード／モードを、`<setting-id>.conf` はそのノードの防御設定を格納します。すべての設定行の直前に、その役割、元のゲーム内パス、on/off の意味をコメントで記載しています。
 
-シェル上のファイル編集は隔離された調査ワークスペースだけに反映されます。ゲームの防御状態を変更する場合は、右側の「防御設定」で変更して「設定を適用」を押してください。
+防御状態の変更は対策フェーズでターミナルから行います。`config set <path> <setting-name> <on|off>` のように、設定ファイル、設定名、値をそれぞれ指定するとゲームへ即時反映されます。たとえば `ssh_keys_only.conf` の設定を有効にする場合は `config set ssh_keys_only.conf ssh_keys_only on` です。不正な設定名や `on` / `off` 以外の値は拒否されます。
 
 ## 検証
 

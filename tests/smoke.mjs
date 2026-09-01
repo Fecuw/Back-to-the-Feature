@@ -50,12 +50,12 @@ await page.waitForFunction(
 await page.keyboard.type('help')
 await page.keyboard.press('Enter')
 await page.waitForFunction(
-  () => document.querySelector('.xterm-rows')?.textContent?.includes('config get|set'),
+  () => document.querySelector('.xterm-rows')?.textContent?.includes('config set PATH KEY on|off'),
   undefined,
   { timeout: 5000 },
 )
 const terminalTail = await page.locator('.xterm-rows').innerText()
-const visibleCommands = ['ports [--listen]', 'ps [--sort cpu|mem]', 'logs [service] [--lines N]', 'inspect [defense|network]', 'ls [path]', 'cat PATH', 'config get|set PATH [VALUE]']
+const visibleCommands = ['ports [--listen]', 'ps [--sort cpu|mem]', 'logs [service] [--lines N]', 'inspect [defense|network]', 'ls [path]', 'cat PATH', 'config get PATH | config set PATH KEY on|off']
 if (!visibleCommands.every((command) => terminalTail.includes(command))) {
   await page.screenshot({ path: 'terminal-help-failed.png', fullPage: true })
   throw new Error(`terminal help did not render command arguments:\n${terminalTail}`)
@@ -63,19 +63,26 @@ if (!visibleCommands.every((command) => terminalTail.includes(command))) {
 await page.screenshot({ path: 'terminal-help.png', fullPage: true })
 await page.getByRole('button', { name: /イベントログ/ }).click()
 
+if (await page.getByRole('button', { name: '防御設定' }).count()) throw new Error('defense settings tab is still rendered')
+if (await page.getByRole('button', { name: '設定を適用' }).count()) throw new Error('defense apply button is still rendered')
+
 await page.getByRole('button', { name: '過去へ戻る' }).click()
 await page.getByText('対策フェーズ').waitFor()
 
-const gatewayDefense = page.locator('.defense-control').filter({ hasText: '認証レート制限' })
-await gatewayDefense.click()
-await page.getByRole('button', { name: '設定を適用' }).click()
+await page.locator('.terminal-switcher button').filter({ hasText: 'EDGE-01' }).click()
+await page.locator('.xterm-helper-textarea').last().focus()
+await page.keyboard.type('config set rate_limit.conf rate_limit on')
+await page.keyboard.press('Enter')
+await page.waitForFunction(() => document.querySelector('.xterm-rows')?.textContent?.includes('updated rate_limit.conf: rate_limit=on'))
 
-await page.locator('.infra-node').filter({ hasText: 'WEB-01' }).click()
-const webDefense = page.locator('.defense-control').filter({ hasText: 'パラメータ化クエリ' })
-await webDefense.click()
-const serviceControl = page.locator('.defense-control').filter({ hasText: 'Webサービス' })
-await serviceControl.click()
-await page.getByRole('button', { name: '設定を適用' }).click()
+await page.locator('.terminal-switcher button').filter({ hasText: 'WEB-01' }).click()
+await page.locator('.xterm-helper-textarea').last().focus()
+await page.keyboard.type('config set parameterized_query.conf parameterized_query on')
+await page.keyboard.press('Enter')
+await page.waitForFunction(() => document.querySelector('.xterm-rows')?.textContent?.includes('updated parameterized_query.conf: parameterized_query=on'))
+await page.keyboard.type('config set service_online.conf service_online off')
+await page.keyboard.press('Enter')
+await page.waitForFunction(() => document.querySelector('.xterm-rows')?.textContent?.includes('updated service_online.conf: service_online=off'))
 
 await page.getByRole('button', { name: 'シミュレーション実行' }).click()
 await page.getByText('業務サービスが停止しています').waitFor({ timeout: 7000 })
@@ -84,8 +91,10 @@ await page.screenshot({ path: 'game-sla-failed.png', fullPage: true })
 await page.getByRole('button', { name: '対策を続ける' }).click()
 
 await page.getByRole('button', { name: '過去へ戻る' }).click()
-await serviceControl.click()
-await page.getByRole('button', { name: '設定を適用' }).click()
+await page.locator('.xterm-helper-textarea').last().focus()
+await page.keyboard.type('config set service_online.conf service_online on')
+await page.keyboard.press('Enter')
+await page.waitForFunction(() => document.querySelector('.xterm-rows')?.textContent?.includes('updated service_online.conf: service_online=on'))
 await page.getByRole('button', { name: 'シミュレーション実行' }).click()
 await page.getByText('攻撃を完全に遮断').waitFor({ timeout: 7000 })
 await page.screenshot({ path: 'game-cleared.png', fullPage: true })
