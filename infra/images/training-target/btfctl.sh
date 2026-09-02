@@ -6,7 +6,7 @@ command_name="$(basename "$0")"
 print_help() {
   cat <<'EOF'
 
-BACK TO THE FEATURE - INVESTIGATION COMMANDS (12)
+BACK TO THE FEATURE - INVESTIGATION COMMANDS (14)
 
 COMMAND                                  ARGUMENTS                         DESCRIPTION
 help [command]                           command: optional                Show all commands or one detailed entry
@@ -21,6 +21,8 @@ inspect [defense|network]                section: optional                Inspec
 ls [path]                                path: optional                   List README and configuration files
 cat PATH                                 workspace file                  Read a README or configuration file
 config get PATH | config set PATH KEY on|off                              Read or immediately apply a defense setting
+shutdown                                 none                              Stop the current node safely
+reboot                                   none                              Restart the current node
 
 Example: config set rate_limit.conf rate_limit on
 
@@ -92,6 +94,16 @@ case "$command_name" in
     else
       printf '\nusage: config get PATH | config set PATH KEY on|off\n\n'; exit 2
     fi
+    ;;
+  shutdown)
+    printf '\nBroadcast message from operator@%s\n' "${BTF_SERVER_ID:-node}"
+    printf 'The system is going down for halt NOW!\n\n'
+    printf '\033]777;btf-system-command=shutdown\007'
+    ;;
+  reboot)
+    printf '\nBroadcast message from operator@%s\n' "${BTF_SERVER_ID:-node}"
+    printf 'The system is going down for reboot NOW!\n\n'
+    printf '\033]777;btf-system-command=reboot\007'
     ;;
   *)
     print_help

@@ -74,10 +74,16 @@ try {
     'ls [path]',
     'cat PATH',
     'config get PATH | config set PATH KEY on|off',
+    'shutdown',
+    'reboot',
   ]
-  if (!gatewayHelp.includes('INVESTIGATION COMMANDS (12)') || !expectedCommands.every((command) => gatewayHelp.includes(command))) {
-    throw new Error('container help is missing its twelve command usages')
+  if (!gatewayHelp.includes('INVESTIGATION COMMANDS (14)') || !expectedCommands.every((command) => gatewayHelp.includes(command))) {
+    throw new Error('container help is missing its fourteen command usages')
   }
+  if (gatewayHelp.includes('game over') || gatewayHelp.includes('ゲームオーバ')) throw new Error('container help disclosed the system-command failure condition')
+
+  const completedWhoami = stripAnsi(await terminalCommand('gateway', 'whoa\t', '10001'))
+  if (!completedWhoami.includes('10001')) throw new Error('live terminal tab completion did not complete whoami')
 
   const gatewayFiles = stripAnsi(await terminalCommand('gateway', 'ls', 'rate_limit.conf'))
   if (!gatewayFiles.includes('README.md') || !gatewayFiles.includes('session.conf')) throw new Error('container workspace does not list its README and session settings')
@@ -95,6 +101,9 @@ try {
   const gatewayStatus = await terminalCommand('gateway', 'status --json', '"node": "gateway"')
   const webStatus = await terminalCommand('web', 'status --json', '"node": "web"')
   if (!stripAnsi(gatewayStatus).includes('sqli-basic-01') || !stripAnsi(webStatus).includes('sqli-basic-01')) throw new Error('terminal stage identity mismatch')
+
+  const shutdownOutput = stripAnsi(await terminalCommand('gateway', 'shutdown', 'halt NOW'))
+  if (!shutdownOutput.includes('halt NOW')) throw new Error('shutdown command was not installed in the live terminal')
 
   console.log(`integration: session ${sessionId.slice(0, 8)} switched gateway -> web and executed live Docker commands`)
 } finally {

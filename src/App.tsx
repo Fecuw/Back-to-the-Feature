@@ -50,6 +50,7 @@ const phaseLabels: Record<Phase, string> = {
   EDITING: '対策フェーズ',
   SIMULATING: '検証中',
   CLEARED: '防御完了',
+  FAILED: 'システム停止',
 }
 
 const danger = new Set(['medium', 'high', 'critical'])
@@ -225,6 +226,7 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
   const [resultDialog, setResultDialog] = useState<SimulationResult | null>(null)
   const [elapsed, setElapsed] = useState(0)
   const [confirmReset, setConfirmReset] = useState(false)
+  const [systemFailure, setSystemFailure] = useState<{ serverId: string; command: 'shutdown' | 'reboot' } | null>(null)
   const [consoleHeight, setConsoleHeight] = useState(defaultConsoleHeight)
   const [runtime, setRuntime] = useState<{
     status: 'local' | 'connecting' | 'live' | 'error'
@@ -241,6 +243,7 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
   const selectedServer = stage.infra.servers.find((server) => server.id === selectedServerId) ?? stage.infra.servers[0]
   const terminalServers = stage.infra.servers.filter((server) => server.shell)
   const terminalServer = terminalServers.find((server) => server.id === terminalServerId) ?? terminalServers[0] ?? stage.infra.servers[0]
+  const orderedTerminalServers = [terminalServer, ...terminalServers.filter((server) => server.id !== terminalServer.id)]
   const maxTime = Math.max(...Object.values(stage.scenario.nodes).map((node) => node.time), 60)
   const observed = phase !== 'INITIALIZING' && results.length > 0
 
@@ -330,6 +333,24 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
     return { ok: true }
   }
 
+  const failFromTerminal = (serverId: string, command: 'shutdown' | 'reboot') => {
+    if (systemFailure || phase === 'CLEARED' || phase === 'FAILED') return
+    timers.current.forEach(window.clearTimeout)
+    setResultDialog(null)
+    setHintOpen(false)
+    setConfirmReset(false)
+    setSettings((current) => ({ ...current, service_online: false }))
+    setPhase('FAILED')
+    setSystemFailure({ serverId, command })
+    setLogs((current) => [{
+      id: `system-${Date.now()}-${serverId}`,
+      time: `00:${String(playhead).padStart(2, '0')}`,
+      server: serverId,
+      level: 'ALERT',
+      message: `${command} command interrupted service availability`,
+    }, ...current])
+  }
+
   const simulate = () => {
     const simulation = runScenario(stage, settings)
     setPhase('SIMULATING')
@@ -384,7 +405,7 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
       <section className="operation-bar">
         <div className={`phase-badge phase-${phase.toLowerCase()}`}><span /> {phaseLabels[phase]}</div>
         <div className="objective"><span>OBJECTIVE</span><strong>{stage.objective}</strong></div>
-        <div className="availability"><Activity size={15} /><span>AVAILABILITY</span><strong>{settings.service_online ? 'HEALTHY' : 'DOWN'}</strong></div>
+        <div className="availability"><Activity size={15} /><span>AVAILABILITY</span><strong>{systemFailure || !settings.service_online ? 'DOWN' : 'HEALTHY'}</strong></div>
       </section>
 
       <Timeline
@@ -467,12 +488,25 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
           )}
         </div>
         <div className="console-body">
-          {consoleTab === 'logs' ? <LogViewer logs={filteredLogs} loading={phase === 'INITIALIZING'} /> : <TerminalPanel server={terminalServer} stage={stage} settings={settings} onConfigChange={changeSettingFromTerminal} connection={runtime.status === 'live' && runtime.sessionId && runtime.accessToken ? { sessionId: runtime.sessionId, accessToken: runtime.accessToken } : undefined} />}
+          {consoleTab === 'logs' && <LogViewer logs={filteredLogs} loading={phase === 'INITIALIZING'} />}
+          {orderedTerminalServers.map((server) => (
+            <TerminalPanel
+              key={server.id}
+              server={server}
+              stage={stage}
+              settings={settings}
+              active={consoleTab === 'terminal' && server.id === terminalServer.id}
+              onConfigChange={changeSettingFromTerminal}
+              onSystemCommand={failFromTerminal}
+              connection={runtime.status === 'live' && runtime.sessionId && runtime.accessToken ? { sessionId: runtime.sessionId, accessToken: runtime.accessToken } : undefined}
+            />
+          ))}
         </div>
       </section>
 
       {hintOpen && <HintDrawer hints={revealedHints} onReveal={revealHint} hasMore={revealedHints.length < Object.values(stage.scenario.nodes).flatMap((node) => node.hints).length} onClose={() => setHintOpen(false)} />}
       {resultDialog && <ResultDialog result={resultDialog} stage={stage} elapsed={elapsed} hints={revealedHints.length} onClose={() => setResultDialog(null)} onExit={onExit} onReset={onReset} />}
+      {systemFailure && <SystemFailureDialog failure={systemFailure} stage={stage} onExit={onExit} onReset={onReset} />}
       {confirmReset && <ConfirmDialog title="ステージをリセット" body="現在の設定変更と調査ログは破棄され、初期状態から再開します。" confirm="リセット" onCancel={() => setConfirmReset(false)} onConfirm={onReset} />}
       {phase === 'INITIALIZING' && <div className="initializing-overlay"><div className="loader-ring" /><strong>ISOLATED RANGE</strong><span>コンテナ構成を復元しています</span></div>}
     </div>
@@ -506,7 +540,7 @@ function Timeline({
           {phase === 'EDITING' ? (
             <button className="primary-button" disabled={!canSimulate} onClick={onSimulate}><Play size={15} fill="currentColor" /> シミュレーション実行</button>
           ) : (
-            <button className="rewind-button" disabled={phase === 'INITIALIZING' || phase === 'SIMULATING' || phase === 'CLEARED'} onClick={onRewind}><History size={15} /> 過去へ戻る</button>
+            <button className="rewind-button" disabled={phase === 'INITIALIZING' || phase === 'SIMULATING' || phase === 'CLEARED' || phase === 'FAILED'} onClick={onRewind}><History size={15} /> 過去へ戻る</button>
           )}
         </div>
       </div>
@@ -655,6 +689,25 @@ function ResultDialog({ result, stage, elapsed, hints, onClose, onExit, onReset 
         {result.cleared && <div className="clear-stats"><div><span>対応時間</span><strong>{formatDuration(elapsed)}</strong></div><div><span>ヒント</span><strong>{hints}</strong></div><div><span>検証</span><strong>PASS</strong></div></div>}
         <div className="dialog-actions">
           {result.cleared ? <><button className="secondary-button" onClick={onReset}><RotateCcw size={15} /> 再挑戦</button><button className="primary-button" onClick={onExit}>ステージ一覧へ <ChevronRight size={16} /></button></> : <button className="primary-button" onClick={onClose}>対策を続ける <ChevronRight size={16} /></button>}
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function SystemFailureDialog({ failure, stage, onExit, onReset }: { failure: { serverId: string; command: 'shutdown' | 'reboot' }; stage: LoadedStage; onExit: () => void; onReset: () => void }) {
+  const server = stage.infra.servers.find((item) => item.id === failure.serverId)
+  return (
+    <div className="modal-backdrop result-backdrop">
+      <section className="result-dialog failed system-failure-dialog" role="alertdialog" aria-modal="true">
+        <div className="result-symbol"><CircleAlert size={34} /></div>
+        <p className="eyebrow">SESSION TERMINATED / CASE {stage.number}</p>
+        <h2>{failure.command === 'shutdown' ? 'システムが停止しました' : 'システムが再起動しました'}</h2>
+        <p>{server?.label ?? failure.serverId} の稼働状態が失われ、インシデント対応を継続できません。ステージを初期状態から再開してください。</p>
+        <div className="system-failure-details"><span>COMMAND</span><code>{failure.command}</code><span>TARGET</span><code>{server?.label ?? failure.serverId}</code></div>
+        <div className="dialog-actions">
+          <button className="secondary-button" onClick={onExit}><ArrowLeft size={15} /> ステージ一覧へ</button>
+          <button className="primary-button" onClick={onReset}><RotateCcw size={15} /> 最初から再開</button>
         </div>
       </section>
     </div>

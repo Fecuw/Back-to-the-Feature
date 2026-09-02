@@ -20,7 +20,7 @@ await page.getByText(/LIVE DOCKER|LOCAL SIM|LOCAL FALLBACK/).waitFor({ timeout: 
 const terminalTargets = page.locator('.terminal-switcher button')
 if (await terminalTargets.count() < 2) throw new Error('terminal target switcher was not rendered')
 await terminalTargets.nth(1).click()
-await page.locator('.xterm-rows').getByText(/operator@web/).waitFor({ timeout: 5000 })
+await page.locator('.terminal-mount:not([hidden]) .xterm-rows').getByText(/operator@web/).waitFor({ timeout: 5000 })
 const resizeHandle = page.getByRole('separator', { name: 'ターミナルとイベントログの高さを変更' })
 const consoleBeforeResize = await page.locator('.console-panel').boundingBox()
 const resizeBox = await resizeHandle.boundingBox()
@@ -32,35 +32,71 @@ await page.mouse.up()
 const consoleAfterResize = await page.locator('.console-panel').boundingBox()
 if (!consoleAfterResize || consoleAfterResize.height < consoleBeforeResize.height + 50) throw new Error('terminal panel did not resize after dragging its handle')
 
-await page.locator('.xterm-helper-textarea').last().focus()
-await page.keyboard.type('ls')
+await page.locator('.terminal-mount:not([hidden]) .xterm-helper-textarea').focus()
+await page.keyboard.type('sta')
+await page.keyboard.press('Tab')
 await page.keyboard.press('Enter')
 await page.waitForFunction(
-  () => document.querySelector('.xterm-rows')?.textContent?.includes('parameterized_query.conf'),
+  () => document.querySelector('.terminal-mount:not([hidden]) .xterm-rows')?.textContent?.includes('HEALTH'),
   undefined,
   { timeout: 5000 },
 )
-await page.keyboard.type('cat parameterized_query.conf')
+await page.keyboard.type('ls')
 await page.keyboard.press('Enter')
 await page.waitForFunction(
-  () => document.querySelector('.xterm-rows')?.textContent?.includes('parameterized_query=off'),
+  () => document.querySelector('.terminal-mount:not([hidden]) .xterm-rows')?.textContent?.includes('parameterized_query.conf'),
+  undefined,
+  { timeout: 5000 },
+)
+await page.keyboard.type('cat para')
+await page.keyboard.press('Tab')
+await page.keyboard.press('Enter')
+await page.waitForFunction(
+  () => document.querySelector('.terminal-mount:not([hidden]) .xterm-rows')?.textContent?.includes('parameterized_query=off'),
   undefined,
   { timeout: 5000 },
 )
 await page.keyboard.type('help')
 await page.keyboard.press('Enter')
 await page.waitForFunction(
-  () => document.querySelector('.xterm-rows')?.textContent?.includes('config set PATH KEY on|off'),
+  () => document.querySelector('.terminal-mount:not([hidden]) .xterm-rows')?.textContent?.includes('config set PATH KEY on|off'),
   undefined,
   { timeout: 5000 },
 )
-const terminalTail = await page.locator('.xterm-rows').innerText()
-const visibleCommands = ['ports [--listen]', 'ps [--sort cpu|mem]', 'logs [service] [--lines N]', 'inspect [defense|network]', 'ls [path]', 'cat PATH', 'config get PATH | config set PATH KEY on|off']
+const terminalTail = await page.locator('.terminal-mount:not([hidden]) .xterm-rows').innerText()
+const visibleCommands = ['ps [--sort cpu|mem]', 'logs [service] [--lines N]', 'inspect [defense|network]', 'ls [path]', 'cat PATH', 'config get PATH | config set PATH KEY on|off', 'shutdown', 'reboot']
 if (!visibleCommands.every((command) => terminalTail.includes(command))) {
   await page.screenshot({ path: 'terminal-help-failed.png', fullPage: true })
   throw new Error(`terminal help did not render command arguments:\n${terminalTail}`)
 }
+if (terminalTail.includes('ゲームオーバ')) throw new Error('shutdown/reboot help disclosed the failure condition')
 await page.screenshot({ path: 'terminal-help.png', fullPage: true })
+await page.locator('.terminal-mount:not([hidden]) .xterm-helper-textarea').focus()
+await page.keyboard.type('status --json')
+await page.keyboard.press('Enter')
+await page.waitForFunction(() => document.querySelector('.terminal-mount:not([hidden]) .xterm-rows')?.textContent?.includes('"node": "web"'))
+
+await page.locator('.terminal-switcher button').filter({ hasText: 'EDGE-01' }).click()
+await page.locator('.terminal-mount:not([hidden]) .xterm-helper-textarea').focus()
+await page.keyboard.type('hostname')
+await page.keyboard.press('Enter')
+await page.waitForFunction(() => document.querySelector('.terminal-mount:not([hidden]) .xterm-rows')?.textContent?.includes('edge-01'))
+await page.locator('.terminal-switcher button').filter({ hasText: 'WEB-01' }).click()
+await page.waitForFunction(() => {
+  const output = document.querySelector('.terminal-mount:not([hidden]) .xterm-rows')?.textContent ?? ''
+  return output.includes('"node": "web"')
+})
+await page.locator('.terminal-mount:not([hidden]) .xterm-helper-textarea').focus()
+await page.keyboard.press('ArrowUp')
+await page.waitForFunction(() => {
+  const output = document.querySelector('.terminal-mount:not([hidden]) .xterm-rows')?.textContent ?? ''
+  return output.trimEnd().endsWith('$ status --json')
+})
+await page.keyboard.press('Enter')
+await page.waitForFunction(() => {
+  const output = document.querySelector('.terminal-mount:not([hidden]) .xterm-rows')?.textContent ?? ''
+  return output.includes('"node": "web"')
+})
 await page.getByRole('button', { name: /イベントログ/ }).click()
 
 if (await page.getByRole('button', { name: '防御設定' }).count()) throw new Error('defense settings tab is still rendered')
@@ -70,19 +106,19 @@ await page.getByRole('button', { name: '過去へ戻る' }).click()
 await page.getByText('対策フェーズ').waitFor()
 
 await page.locator('.terminal-switcher button').filter({ hasText: 'EDGE-01' }).click()
-await page.locator('.xterm-helper-textarea').last().focus()
+await page.locator('.terminal-mount:not([hidden]) .xterm-helper-textarea').focus()
 await page.keyboard.type('config set rate_limit.conf rate_limit on')
 await page.keyboard.press('Enter')
-await page.waitForFunction(() => document.querySelector('.xterm-rows')?.textContent?.includes('updated rate_limit.conf: rate_limit=on'))
+await page.waitForFunction(() => document.querySelector('.terminal-mount:not([hidden]) .xterm-rows')?.textContent?.includes('updated rate_limit.conf: rate_limit=on'))
 
 await page.locator('.terminal-switcher button').filter({ hasText: 'WEB-01' }).click()
-await page.locator('.xterm-helper-textarea').last().focus()
+await page.locator('.terminal-mount:not([hidden]) .xterm-helper-textarea').focus()
 await page.keyboard.type('config set parameterized_query.conf parameterized_query on')
 await page.keyboard.press('Enter')
-await page.waitForFunction(() => document.querySelector('.xterm-rows')?.textContent?.includes('updated parameterized_query.conf: parameterized_query=on'))
+await page.waitForFunction(() => document.querySelector('.terminal-mount:not([hidden]) .xterm-rows')?.textContent?.includes('updated parameterized_query.conf: parameterized_query=on'))
 await page.keyboard.type('config set service_online.conf service_online off')
 await page.keyboard.press('Enter')
-await page.waitForFunction(() => document.querySelector('.xterm-rows')?.textContent?.includes('updated service_online.conf: service_online=off'))
+await page.waitForFunction(() => document.querySelector('.terminal-mount:not([hidden]) .xterm-rows')?.textContent?.includes('updated service_online.conf: service_online=off'))
 
 await page.getByRole('button', { name: 'シミュレーション実行' }).click()
 await page.getByText('業務サービスが停止しています').waitFor({ timeout: 7000 })
@@ -91,19 +127,36 @@ await page.screenshot({ path: 'game-sla-failed.png', fullPage: true })
 await page.getByRole('button', { name: '対策を続ける' }).click()
 
 await page.getByRole('button', { name: '過去へ戻る' }).click()
-await page.locator('.xterm-helper-textarea').last().focus()
+await page.locator('.terminal-mount:not([hidden]) .xterm-helper-textarea').focus()
 await page.keyboard.type('config set service_online.conf service_online on')
 await page.keyboard.press('Enter')
-await page.waitForFunction(() => document.querySelector('.xterm-rows')?.textContent?.includes('updated service_online.conf: service_online=on'))
+await page.waitForFunction(() => document.querySelector('.terminal-mount:not([hidden]) .xterm-rows')?.textContent?.includes('updated service_online.conf: service_online=on'))
 await page.getByRole('button', { name: 'シミュレーション実行' }).click()
 await page.getByText('攻撃を完全に遮断').waitFor({ timeout: 7000 })
 await page.screenshot({ path: 'game-cleared.png', fullPage: true })
 await page.getByRole('button', { name: 'ステージ一覧へ' }).click()
 await page.getByRole('heading', { name: '未解決インシデント' }).waitFor()
 
+await page.locator('.stage-card').first().getByRole('button').click()
+await page.getByText('観察フェーズ').waitFor({ timeout: 5000 })
+await page.getByRole('button', { name: 'ターミナル' }).click()
+await page.locator('.terminal-mount:not([hidden]) .xterm-helper-textarea').focus()
+await page.keyboard.type('shut')
+await page.keyboard.press('Tab')
+await page.keyboard.press('Enter')
+await page.getByRole('alertdialog').getByRole('heading', { name: 'システムが停止しました' }).waitFor()
+await page.getByRole('button', { name: '最初から再開' }).click()
+await page.getByText('観察フェーズ').waitFor({ timeout: 5000 })
+await page.getByRole('button', { name: 'ターミナル' }).click()
+await page.locator('.terminal-mount:not([hidden]) .xterm-helper-textarea').focus()
+await page.keyboard.type('reb')
+await page.keyboard.press('Tab')
+await page.keyboard.press('Enter')
+await page.getByRole('alertdialog').getByRole('heading', { name: 'システムが再起動しました' }).waitFor()
+
 if (errors.length) {
   throw new Error(errors.join('\n'))
 }
 
-console.log('smoke: shutdown rejected by SLA, then service restored and stage cleared')
+console.log('smoke: terminal completion/history retained, SLA restored, shutdown and reboot end the session')
 await browser.close()

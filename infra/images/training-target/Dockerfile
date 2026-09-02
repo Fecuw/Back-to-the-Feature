@@ -20,7 +20,7 @@ COPY www /opt/btf/www
 COPY defaults /opt/btf/defaults
 
 RUN chmod 0555 /usr/local/bin/start-target /usr/local/bin/btfctl \
-  && for command in help status services ports logs inspect config; do ln -s /usr/local/bin/btfctl "/usr/local/bin/$command"; done \
+  && for command in help status services ports logs inspect config shutdown reboot; do ln -s /usr/local/bin/btfctl "/usr/local/bin/$command"; done \
   && chmod -R a-w /opt/btf /etc/profile.d/btf.sh
 
 USER 10001:10001

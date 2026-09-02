@@ -1,4 +1,4 @@
-export type Phase = 'INITIALIZING' | 'OBSERVING' | 'EDITING' | 'SIMULATING' | 'CLEARED'
+export type Phase = 'INITIALIZING' | 'OBSERVING' | 'EDITING' | 'SIMULATING' | 'CLEARED' | 'FAILED'
 export type ResultStatus = 'success' | 'blocked' | 'skipped'
 export type Severity = 'info' | 'low' | 'medium' | 'high' | 'critical'
 export type AvailabilityStatus = 'OK' | 'MUMBLE' | 'DOWN' | 'CORRUPT'

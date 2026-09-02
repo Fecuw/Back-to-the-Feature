@@ -101,6 +101,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .phase-initializing, .phase-simulating { color: var(--yellow); background: #211e15; border-color: #4d4526; }
 .phase-editing { color: var(--blue); background: #151c29; border-color: #344767; }
 .phase-cleared { color: var(--green); }
+.phase-failed { color: var(--red); background: #241512; border-color: #61332c; }
 .objective { min-width: 0; margin-left: 19px; display: flex; align-items: center; gap: 11px; }
 .objective span, .availability span { color: #667176; font: 500 8px "IBM Plex Mono", monospace; }
 .objective strong { color: #aeb6b7; font-size: 10px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -263,6 +264,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .log-empty { height: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; color: #596469; font: 500 9px "IBM Plex Mono", monospace; }
 .mini-spinner { width: 10px; height: 10px; border: 1px solid #596469; border-top-color: var(--green); border-radius: 50%; animation: spin .8s linear infinite; }
 .terminal-mount { width: 100%; height: 100%; padding: 7px 10px; }
+.terminal-mount[hidden] { display: none; }
 .terminal-mount .xterm { height: 100%; }
 .terminal-mount .xterm-viewport { scrollbar-width: thin; scrollbar-color: #354046 transparent; }
 
@@ -298,6 +300,12 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .result-dialog.cleared::before { background: var(--green); }
 .result-symbol { width: 54px; height: 54px; margin-bottom: 18px; display: grid; place-items: center; color: var(--red); border: 1px solid #61332c; background: #241512; }
 .cleared .result-symbol { color: var(--green); border-color: #31574d; background: #11231f; }
+.system-failure-dialog { width: min(560px, 100%); }
+.system-failure-details { display: grid; grid-template-columns: 90px minmax(0, 1fr); margin: 22px 0; border: 1px solid var(--border); }
+.system-failure-details span, .system-failure-details code { min-height: 36px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.system-failure-details span { color: #687378; border-right: 1px solid var(--border); font: 600 8px "IBM Plex Mono", monospace; }
+.system-failure-details code { color: var(--white); font: 600 10px "IBM Plex Mono", monospace; }
+.system-failure-details > :nth-last-child(-n+2) { border-bottom: 0; }
 .result-dialog h2 { margin: 0 0 10px; color: var(--white); font-size: 23px; }
 .result-dialog > p:not(.eyebrow) { margin: 0; color: #828d91; font-size: 11px; line-height: 1.7; }
 .result-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin: 20px 0; }

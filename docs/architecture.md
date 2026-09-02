@@ -36,10 +36,10 @@ Local development may enable `/auth/demo`. Production must set `ALLOW_DEMO_AUTH=
 
 1. Starting a stage creates a database session and calls the internal orchestrator.
 2. The orchestrator creates an `internal: true` Docker network and one container per shell-enabled stage server.
-3. A terminal switch closes the current browser WebSocket and opens a new connection for the selected `server` ID.
+3. The browser keeps one terminal connection per shell-enabled `server` and switches only the visible terminal, preserving each node's scrollback, input history and shell state.
 4. The API checks ownership and proxies frames to the orchestrator.
 5. The orchestrator resolves containers by trusted Docker labels, starts `bash --login` with a TTY, proxies raw bytes, and applies resize messages.
-6. Browser disconnect closes stdin. Session deletion or the 30-minute TTL stops containers and removes their network.
+6. Leaving the stage closes each terminal connection. Session deletion or the 30-minute TTL stops containers and removes their network.
 
 ## Container security profile
 

@@ -14,8 +14,10 @@ interface TerminalPanelProps {
   server: ServerDefinition
   stage: LoadedStage
   settings: Record<string, boolean>
+  active: boolean
   connection?: LiveTerminalConnection
   onConfigChange: (serverId: string, settingId: string, value: boolean) => { ok: boolean; message?: string }
+  onSystemCommand: (serverId: string, command: 'shutdown' | 'reboot') => void
 }
 
 const helpEntries = [
@@ -31,7 +33,11 @@ const helpEntries = [
   ['ls [path]', 'path: optional', 'workspace内のREADMEと設定ファイルを一覧表示'],
   ['cat PATH', 'workspace file', 'READMEまたは設定ファイルの内容を表示'],
   ['config get PATH | config set PATH KEY on|off', 'path; setting name; on/off', '設定表示、または防御設定を即時反映'],
+  ['shutdown', 'none', '現在のノードを安全に停止'],
+  ['reboot', 'none', '現在のノードを再起動'],
 ] as const
+
+const commandNames = [...helpEntries.map(([usage]) => usage.split(' ')[0]), 'clear']
 
 function normalizeWorkspacePath(path = '.') {
   if (path.includes('..')) return null
@@ -40,12 +46,23 @@ function normalizeWorkspacePath(path = '.') {
   return normalized.startsWith('/') || normalized.includes('/') ? null : normalized
 }
 
-export function TerminalPanel({ server, stage, settings, connection, onConfigChange }: TerminalPanelProps) {
+export function TerminalPanel({ server, stage, settings, active, connection, onConfigChange, onSystemCommand }: TerminalPanelProps) {
   const mountRef = useRef<HTMLDivElement>(null)
   const settingsRef = useRef(settings)
   const onConfigChangeRef = useRef(onConfigChange)
+  const onSystemCommandRef = useRef(onSystemCommand)
+  const activeRef = useRef(active)
+  const activateRef = useRef<() => void>(() => undefined)
   settingsRef.current = settings
   onConfigChangeRef.current = onConfigChange
+  onSystemCommandRef.current = onSystemCommand
+  activeRef.current = active
+
+  useEffect(() => {
+    if (!active) return
+    const frame = window.requestAnimationFrame(() => activateRef.current())
+    return () => window.cancelAnimationFrame(frame)
+  }, [active])
 
   useEffect(() => {
     if (!mountRef.current) return
@@ -66,19 +83,23 @@ export function TerminalPanel({ server, stage, settings, connection, onConfigCha
     const fit = new FitAddon()
     terminal.loadAddon(fit)
     terminal.open(mountRef.current)
-    fit.fit()
 
     let disposed = false
     let socket: WebSocket | undefined
     const resize = () => {
-      if (disposed) return
+      if (disposed || !mountRef.current?.clientWidth || !mountRef.current.clientHeight) return
       fit.fit()
       if (socket?.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: 'resize', cols: terminal.cols, rows: terminal.rows }))
       }
     }
+    activateRef.current = () => {
+      resize()
+      terminal.focus()
+    }
     const observer = new ResizeObserver(resize)
     observer.observe(mountRef.current)
+    if (activeRef.current) window.requestAnimationFrame(resize)
 
     if (connection) {
       terminal.writeln(`Back to the Feature // connecting ${server.label} ...`)
@@ -86,10 +107,12 @@ export function TerminalPanel({ server, stage, settings, connection, onConfigCha
       socket.binaryType = 'arraybuffer'
       const decoder = new TextDecoder()
       let liveOutputBuffer = ''
+      let liveControlBuffer = ''
+      let systemCommandSignaled = false
       socket.addEventListener('open', () => {
         if (disposed) return
         resize()
-        terminal.focus()
+        if (activeRef.current) terminal.focus()
       })
       socket.addEventListener('message', (event) => {
         if (disposed) return
@@ -97,6 +120,12 @@ export function TerminalPanel({ server, stage, settings, connection, onConfigCha
           ? event.data
           : decoder.decode(new Uint8Array(event.data as ArrayBuffer), { stream: true })
         terminal.write(chunk)
+        liveControlBuffer = (liveControlBuffer + chunk).slice(-512)
+        const systemCommand = liveControlBuffer.match(/\x1b\]777;btf-system-command=(shutdown|reboot)\x07/)
+        if (systemCommand && !systemCommandSignaled) {
+          systemCommandSignaled = true
+          onSystemCommandRef.current(server.id, systemCommand[1] as 'shutdown' | 'reboot')
+        }
         liveOutputBuffer = (liveOutputBuffer + chunk).slice(-4096)
         const lines = liveOutputBuffer.split(/\r?\n/)
         liveOutputBuffer = lines.pop() ?? ''
@@ -117,6 +146,7 @@ export function TerminalPanel({ server, stage, settings, connection, onConfigCha
       const input = terminal.onData((data) => socket?.readyState === WebSocket.OPEN && socket.send(data))
       return () => {
         disposed = true
+        activateRef.current = () => undefined
         observer.disconnect()
         input.dispose()
         socket?.close()
@@ -159,7 +189,68 @@ export function TerminalPanel({ server, stage, settings, connection, onConfigCha
     }
 
     let line = ''
+    const history: string[] = []
+    let historyIndex = 0
+    let draftLine = ''
     const workspaceFiles = () => createTerminalFiles(stage, server, settingsRef.current)
+    const redrawLine = () => {
+      terminal.write('\r\x1b[2K')
+      prompt()
+      terminal.write(line)
+    }
+    const completionCandidates = (rawLine: string) => {
+      const content = rawLine.trimStart()
+      const endsWithSpace = /\s$/.test(content)
+      const words = content ? content.split(/\s+/) : []
+      const wordIndex = !content ? 0 : endsWithSpace ? words.length : words.length - 1
+      const prefix = endsWithSpace ? '' : words[wordIndex] ?? ''
+      const name = words[0] ?? ''
+      const files = Object.keys(workspaceFiles())
+      const fileCandidates = prefix.startsWith('/workspace/') ? files.map((file) => `/workspace/${file}`) : files
+      let candidates: string[] = []
+
+      if (wordIndex === 0) candidates = commandNames
+      else if (name === 'help' && wordIndex === 1) candidates = commandNames
+      else if (name === 'ls' && wordIndex === 1) candidates = ['-l', '.', ...fileCandidates]
+      else if (name === 'cat' && wordIndex === 1) candidates = fileCandidates
+      else if (name === 'config' && wordIndex === 1) candidates = ['get', 'set']
+      else if (name === 'config' && wordIndex === 2) candidates = fileCandidates
+      else if (name === 'config' && words[1] === 'set' && wordIndex === 3) {
+        const path = normalizeWorkspacePath(words[2])
+        const assignment = path ? workspaceFiles()[path]?.match(/^([a-z][a-z0-9_]*)=/m) : undefined
+        candidates = assignment ? [assignment[1]] : []
+      } else if (name === 'config' && words[1] === 'set' && wordIndex === 4) candidates = ['on', 'off']
+      else if (name === 'status' && wordIndex === 1) candidates = ['--json']
+      else if (name === 'services' && wordIndex === 1) candidates = ['--all']
+      else if (name === 'ports' && wordIndex === 1) candidates = ['--listen']
+      else if (name === 'ps' && wordIndex === 1) candidates = ['--sort']
+      else if (name === 'ps' && words[wordIndex - 1] === '--sort') candidates = ['cpu', 'mem']
+      else if ((name === 'logs' || name === 'tail') && wordIndex > 0) candidates = ['--lines', ...server.services]
+      else if (name === 'inspect' && wordIndex === 1) candidates = ['defense', 'network']
+
+      return { prefix, candidates: [...new Set(candidates)].filter((candidate) => candidate.startsWith(prefix)).sort() }
+    }
+    const complete = () => {
+      const { prefix, candidates } = completionCandidates(line)
+      if (!candidates.length) {
+        terminal.write('\x07')
+        return
+      }
+      const commonPrefix = candidates.reduce((common, candidate) => {
+        let index = 0
+        while (index < common.length && index < candidate.length && common[index] === candidate[index]) index += 1
+        return common.slice(0, index)
+      })
+      if (candidates.length === 1 || commonPrefix.length > prefix.length) {
+        const replacement = candidates.length === 1 ? `${candidates[0]} ` : commonPrefix
+        line = `${line.slice(0, line.length - prefix.length)}${replacement}`
+        redrawLine()
+        return
+      }
+      terminal.write('\r\n')
+      terminal.writeln(candidates.join('  '))
+      redrawLine()
+    }
     const run = (raw: string) => {
       const [name = '', ...args] = tokenize(raw.trim())
       if (!name) return
@@ -228,6 +319,11 @@ export function TerminalPanel({ server, stage, settings, connection, onConfigCha
             output(result.ok ? [`updated ${path}: ${key}=${value}`] : [result.message ?? 'config: 設定を変更できませんでした'])
           }
         }
+      } else if (name === 'shutdown' || name === 'reboot') {
+        output(name === 'shutdown'
+          ? [`Broadcast message from operator@${server.label.toLowerCase()}`, 'The system is going down for halt NOW!']
+          : [`Broadcast message from operator@${server.label.toLowerCase()}`, 'The system is going down for reboot NOW!'])
+        onSystemCommandRef.current(server.id, name)
       } else {
         output([`command not found: ${name}`, "利用可能なコマンドは 'help' で確認できます"])
       }
@@ -237,9 +333,25 @@ export function TerminalPanel({ server, stage, settings, connection, onConfigCha
       if (!server.shell) return
       if (data === '\r') {
         terminal.write('\r\n')
+        if (line.trim()) history.push(line)
         run(line)
         line = ''
+        historyIndex = history.length
+        draftLine = ''
         prompt()
+      } else if (data === '\t') {
+        complete()
+      } else if (data === '\x1b[A') {
+        if (!history.length) return
+        if (historyIndex === history.length) draftLine = line
+        historyIndex = Math.max(0, historyIndex - 1)
+        line = history[historyIndex]
+        redrawLine()
+      } else if (data === '\x1b[B') {
+        if (historyIndex >= history.length) return
+        historyIndex += 1
+        line = historyIndex === history.length ? draftLine : history[historyIndex]
+        redrawLine()
       } else if (data === '\u007f') {
         if (line.length > 0) {
           line = line.slice(0, -1)
@@ -248,8 +360,10 @@ export function TerminalPanel({ server, stage, settings, connection, onConfigCha
       } else if (data === '\u000c') {
         terminal.clear()
         line = ''
+        historyIndex = history.length
+        draftLine = ''
         prompt()
-      } else if (data >= ' ') {
+      } else if (/^[^\x00-\x1f\x7f]+$/.test(data)) {
         line += data
         terminal.write(data)
       }
@@ -257,12 +371,13 @@ export function TerminalPanel({ server, stage, settings, connection, onConfigCha
 
     return () => {
       disposed = true
+      activateRef.current = () => undefined
       observer.disconnect()
       disposable.dispose()
       terminal.element?.remove()
       window.setTimeout(() => terminal.dispose(), 250)
     }
-  }, [connection, server, stage])
+  }, [connection?.accessToken, connection?.sessionId, server, stage])
 
-  return <div ref={mountRef} className="terminal-mount" aria-label={`${server.label} terminal`} />
+  return <div ref={mountRef} className="terminal-mount" aria-label={`${server.label} terminal`} hidden={!active} />
 }
