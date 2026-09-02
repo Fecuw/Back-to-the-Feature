@@ -1,0 +1,23 @@
+{
+  "name": "Back to the Feature",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:22",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
+      "moby": false
+    },
+    "ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {}
+  },
+  "forwardPorts": [5173, 4173, 18080],
+  "portsAttributes": {
+    "5173": { "label": "Vite dev server" },
+    "4173": { "label": "Vite preview (test:smoke)" },
+    "18080": { "label": "API (docker compose)" }
+  },
+  "postCreateCommand": "cp -n .env.example .env; npm install && npx playwright install --with-deps chromium && curl -fsSL https://chatgpt.com/codex/install.sh | sh",
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-playwright.playwright"]
+    }
+  },
+  "remoteUser": "node"
+}
