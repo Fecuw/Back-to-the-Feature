@@ -16,15 +16,18 @@ import {
   KeyRound,
   Lightbulb,
   LogOut,
+  MessageSquareWarning,
   Network,
   Play,
   RotateCcw,
   Search,
   Server,
+  ServerOff,
   Shield,
   ShieldAlert,
   TerminalSquare,
   User,
+  UsersRound,
   X,
   XCircle,
   Zap,
@@ -50,7 +53,7 @@ const phaseLabels: Record<Phase, string> = {
   EDITING: '対策フェーズ',
   SIMULATING: '検証中',
   CLEARED: '防御完了',
-  FAILED: 'システム停止',
+  FAILED: 'ゲームオーバー',
 }
 
 const danger = new Set(['medium', 'high', 'critical'])
@@ -342,8 +345,21 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
     setSettings((current) => ({ ...current, service_online: false }))
     setPhase('FAILED')
     setSystemFailure({ serverId, command })
+    const failureTime = Date.now()
     setLogs((current) => [{
-      id: `system-${Date.now()}-${serverId}`,
+      id: `complaints-${failureTime}-${serverId}`,
+      time: `00:${String(playhead + 2).padStart(2, '0')}`,
+      server: 'customer-support',
+      level: 'ALERT',
+      message: '顧客から苦情: 「システム使えんやんけ！」',
+    }, {
+      id: `sla-${failureTime}-${serverId}`,
+      time: `00:${String(playhead + 1).padStart(2, '0')}`,
+      server: 'sla-monitor',
+      level: 'ALERT',
+      message: `availability probe failed after ${command}: SLA breached`,
+    }, {
+      id: `system-${failureTime}-${serverId}`,
       time: `00:${String(playhead).padStart(2, '0')}`,
       server: serverId,
       level: 'ALERT',
@@ -425,7 +441,7 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
         <section className="infra-panel panel">
           <div className="panel-header">
             <div><Network size={16} /><strong>INFRASTRUCTURE</strong><span>SESSION / {stage.id.toUpperCase()}</span></div>
-            <div className="map-legend"><span><i className="online-dot" /> ONLINE</span><span><i className="attack-dot" /> ATTACK PATH</span></div>
+            <div className="map-legend"><span><i className="online-dot" /> CUSTOMER ACCESS</span><span><i className="attack-dot" /> ATTACKER ACCESS</span></div>
           </div>
           <InfraGraph stage={stage} selectedId={selectedServerId} onSelect={setSelectedServerId} results={results} playhead={playhead} />
         </section>
@@ -573,22 +589,36 @@ function Timeline({
 function InfraGraph({ stage, selectedId, onSelect, results, playhead }: { stage: LoadedStage; selectedId: string; onSelect: (id: string) => void; results: AttackResult[]; playhead: number }) {
   const activeResult = [...results].reverse().find((result) => result.time <= playhead)
   const activeTarget = activeResult ? stage.scenario.nodes[activeResult.nodeId].target : null
+  const customerTarget = stage.infra.servers.find((server) => server.id === stage.availability_checks[0]?.target) ?? stage.infra.servers.find((server) => server.status === 'online') ?? stage.infra.servers[0]
+  const customerPosition = { x: 9, y: 78 }
   return (
     <div className="infra-graph">
       <div className="grid-plane" />
       <svg className="connection-layer" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+        <g className="customer-edge">
+          <line x1={customerPosition.x} y1={customerPosition.y} x2={customerTarget.position.x} y2={customerTarget.position.y} vectorEffect="non-scaling-stroke" />
+          <text x={(customerPosition.x + customerTarget.position.x) / 2} y={(customerPosition.y + customerTarget.position.y) / 2 + 4}>NORMAL ACCESS</text>
+          <circle r="0.75"><animateMotion dur="1.8s" repeatCount="indefinite" path={`M ${customerPosition.x} ${customerPosition.y} L ${customerTarget.position.x} ${customerTarget.position.y}`} /></circle>
+        </g>
         {stage.infra.connections.map((edge) => {
           const from = stage.infra.servers.find((server) => server.id === edge.from)!
           const to = stage.infra.servers.find((server) => server.id === edge.to)!
           const hot = activeTarget === to.id || activeTarget === from.id
+          const threat = from.status === 'restricted'
           return (
-            <g key={`${edge.from}-${edge.to}`} className={hot ? 'hot-edge' : ''}>
+            <g key={`${edge.from}-${edge.to}`} className={`${threat ? 'threat-edge' : ''} ${hot ? 'hot-edge' : ''}`}>
               <line x1={from.position.x} y1={from.position.y} x2={to.position.x} y2={to.position.y} vectorEffect="non-scaling-stroke" />
               <text x={(from.position.x + to.position.x) / 2} y={(from.position.y + to.position.y) / 2 - 2}>{edge.label}</text>
+              {threat && <circle r="0.75"><animateMotion dur="1.45s" repeatCount="indefinite" path={`M ${from.position.x} ${from.position.y} L ${to.position.x} ${to.position.y}`} /></circle>}
             </g>
           )
         })}
       </svg>
+      <div className="infra-node customer-node" style={{ left: `${customerPosition.x}%`, top: `${customerPosition.y}%` }} aria-label="正規利用客がサービスにアクセス中">
+        <span className="node-icon"><UsersRound size={20} /></span>
+        <span className="node-copy"><strong>CUSTOMER</strong><small>正規利用客</small><code>ACCESSING...</code></span>
+        <i className="node-status" />
+      </div>
       {stage.infra.servers.map((server) => {
         const isTarget = activeTarget === server.id
         return (
@@ -601,11 +631,12 @@ function InfraGraph({ stage, selectedId, onSelect, results, playhead }: { stage:
             <span className="node-icon"><ServerIcon server={server} /></span>
             <span className="node-copy"><strong>{server.label}</strong><small>{server.role}</small><code>{server.ip}</code></span>
             <i className="node-status" />
+            {server.status === 'restricted' && <span className="threat-label">ATTACKER</span>}
             {isTarget && <span className="pulse-ring" />}
           </button>
         )
       })}
-      <div className="zone-label zone-wan">UNTRUSTED</div>
+      <div className="zone-label zone-wan">EXTERNAL ACCESS</div>
       <div className="zone-label zone-internal">SESSION NETWORK / ISOLATED</div>
     </div>
   )
@@ -697,15 +728,39 @@ function ResultDialog({ result, stage, elapsed, hints, onClose, onExit, onReset 
 
 function SystemFailureDialog({ failure, stage, onExit, onReset }: { failure: { serverId: string; command: 'shutdown' | 'reboot' }; stage: LoadedStage; onExit: () => void; onReset: () => void }) {
   const server = stage.infra.servers.find((item) => item.id === failure.serverId)
+  const stoppedLabel = failure.command === 'shutdown' ? '停止' : '再起動'
   return (
-    <div className="modal-backdrop result-backdrop">
-      <section className="result-dialog failed system-failure-dialog" role="alertdialog" aria-modal="true">
-        <div className="result-symbol"><CircleAlert size={34} /></div>
-        <p className="eyebrow">SESSION TERMINATED / CASE {stage.number}</p>
-        <h2>{failure.command === 'shutdown' ? 'システムが停止しました' : 'システムが再起動しました'}</h2>
-        <p>{server?.label ?? failure.serverId} の稼働状態が失われ、インシデント対応を継続できません。ステージを初期状態から再開してください。</p>
-        <div className="system-failure-details"><span>COMMAND</span><code>{failure.command}</code><span>TARGET</span><code>{server?.label ?? failure.serverId}</code></div>
-        <div className="dialog-actions">
+    <div className="modal-backdrop system-failure-backdrop">
+      <section className="system-failure-dialog" role="alertdialog" aria-modal="true" aria-labelledby="system-failure-title" aria-describedby="system-failure-summary">
+        <header className="game-over-header">
+          <p>SESSION TERMINATED / CASE {stage.number}</p>
+          <h2 id="system-failure-title">GAME OVER</h2>
+          <span>ゲームオーバー</span>
+        </header>
+
+        <div className="failure-visual" id="system-failure-summary">
+          <div className="failure-customer">
+            <div className="failure-customer-icon"><UsersRound size={31} /></div>
+            <strong>CUSTOMER</strong>
+            <small>正規利用客</small>
+          </div>
+          <div className="complaint-bubble">
+            <span><MessageSquareWarning size={15} /> 苦情が着信</span>
+            <h3>「システム使えんやんけ！」</h3>
+            <p>使っていたサービスが突然切断されました。</p>
+          </div>
+          <div className="failure-server">
+            <div className="failure-server-icon"><ServerOff size={31} /></div>
+            <strong>{server?.label ?? failure.serverId}</strong>
+            <small>OFFLINE</small>
+          </div>
+        </div>
+
+        <div className="failure-command-result">
+          <CircleAlert size={18} />
+          <div><h3>システムが{stoppedLabel}しました</h3><p><code>$ {failure.command}</code> により顧客の通信を切断したため、対応失敗です。</p></div>
+        </div>
+        <div className="dialog-actions system-failure-actions">
           <button className="secondary-button" onClick={onExit}><ArrowLeft size={15} /> ステージ一覧へ</button>
           <button className="primary-button" onClick={onReset}><RotateCcw size={15} /> 最初から再開</button>
         </div>

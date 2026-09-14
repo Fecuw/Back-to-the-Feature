@@ -36,6 +36,20 @@ Googleログインを使う場合は `.env` の `GOOGLE_CLIENT_ID` と、フロ�
 
 `.env.example` は、各設定行の直前に用途と本番運用上の注意をコメントで記載しています。
 
+## UIの変更場所
+
+フロントエンドUIは主に次のファイルで設定しています。
+
+| ファイル | 変更できる内容 |
+| --- | --- |
+| `src/App.tsx` | ステージ一覧、ゲーム画面、インフラ構成図、ダイアログの表示と画面遷移 |
+| `src/styles.css` | 色、レイアウト、サイズ、アニメーションなどの見た目全般 |
+| `src/components/TerminalPanel.tsx` | 画面下部のターミナルUIと、入力できるコマンドの振る舞い |
+| `src/stages/<stage-id>/stage.json` | ステージ名、説明、サーバー、接続線、配置座標、防御設定 |
+| `src/stages/<stage-id>/scenario.json` | 攻撃ステップ、ログ、成功／遮断時の表示文言 |
+
+正規利用客（緑）と攻撃者（赤）のアクセス表示は `src/App.tsx` の `InfraGraph`、色や通信アニメーションは `src/styles.css` の `.customer-*` / `.threat-*` で調整できます。`shutdown` / `reboot` 実行後の苦情とゲームオーバー表示は `src/App.tsx` の `SystemFailureDialog`、見た目は `src/styles.css` の `.system-failure-*` / `.failure-*` で設定しています。
+
 ## ターミナルと設定ファイル
 
 画面下部のターミナル／イベントログは、上端のハンドルを上下にドラッグして高さを変更できます。ハンドルへキーボードフォーカスを移した場合は、`↑` / `↓`（20px）、`PageUp` / `PageDown`（80px）、`Home` / `End`（最小／最大）でも変更できます。ダブルクリックすると初期サイズへ戻ります。
