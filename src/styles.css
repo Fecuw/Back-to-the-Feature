@@ -1641,7 +1641,7 @@ select:focus-visible {
 .log-row {
   min-height: 25px;
   display: grid;
-  grid-template-columns: 92px 48px 76px minmax(0, 1fr);
+  grid-template-columns: 92px 48px 12ch minmax(0, 1fr);
   align-items: center;
   padding: 0 12px;
   border-bottom: 1px solid #151a1d;
@@ -1666,6 +1666,11 @@ select:focus-visible {
 }
 
 .log-row strong {
+  min-width: 0;
+  padding-right: 1ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: #7e898d;
   font-weight: 500;
 }
