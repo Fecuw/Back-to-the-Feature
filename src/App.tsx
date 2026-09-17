@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   Activity,
   ArrowLeft,
@@ -32,6 +32,7 @@ import {
   XCircle,
   Zap,
 } from 'lucide-react'
+import { placeGraphLabels } from './lib/graphLayout'
 import { createDefaultSettings, runScenario } from './engine'
 import { stages } from './stages/loader'
 import { useProgress } from './store'
@@ -591,29 +592,69 @@ function InfraGraph({ stage, selectedId, onSelect, results, playhead }: { stage:
   const activeTarget = activeResult ? stage.scenario.nodes[activeResult.nodeId].target : null
   const customerTarget = stage.infra.servers.find((server) => server.id === stage.availability_checks[0]?.target) ?? stage.infra.servers.find((server) => server.status === 'online') ?? stage.infra.servers[0]
   const customerPosition = { x: 9, y: 78 }
+  const graphRef = useRef<HTMLDivElement>(null)
+  const canvasRef = useRef<HTMLDivElement>(null)
+  const edges = [
+    { from: customerPosition, to: customerTarget.position, label: 'NORMAL ACCESS', kind: 'customer-edge', animated: true },
+    ...stage.infra.connections.map((edge) => {
+      const from = stage.infra.servers.find((server) => server.id === edge.from)!
+      const to = stage.infra.servers.find((server) => server.id === edge.to)!
+      return {
+        from: from.position, to: to.position, label: edge.label,
+        kind: `${from.status === 'restricted' ? 'threat-edge' : ''} ${activeTarget === to.id || activeTarget === from.id ? 'hot-edge' : ''}`,
+        animated: from.status === 'restricted',
+      }
+    }),
+  ]
+  useLayoutEffect(() => {
+    const graph = graphRef.current!
+    const canvas = canvasRef.current!
+    const nodes = [...canvas.querySelectorAll<HTMLElement>('.infra-node')]
+    const labels = [...canvas.querySelectorAll<HTMLElement>('.connection-label')]
+    const positions = [customerPosition, ...stage.infra.servers.map((server) => server.position)]
+    const layout = () => {
+      const maxWidth = Math.max(...nodes.map((node) => node.offsetWidth))
+      const maxHeight = Math.max(...nodes.map((node) => node.offsetHeight))
+      const maxLabelWidth = Math.max(...labels.map((label) => label.offsetWidth))
+      // Preserve readable spacing in the stage maps; small viewports scroll this canvas.
+      const width = Math.max(graph.clientWidth, maxWidth * 8, maxLabelWidth * 4)
+      const height = Math.max(graph.clientHeight, maxHeight * 6, ...labels.map((label) => label.offsetHeight * 12))
+      canvas.style.width = `${width}px`
+      canvas.style.height = `${height}px`
+      const boxes = nodes.map((node, i) => ({
+        x: positions[i].x * width / 100, y: positions[i].y * height / 100,
+        width: node.offsetWidth, height: node.offsetHeight,
+      }))
+      const placed = placeGraphLabels(boxes, labels.map((label, i) => ({
+        x: (edges[i].from.x + edges[i].to.x) * width / 200,
+        y: (edges[i].from.y + edges[i].to.y) * height / 200,
+        width: label.offsetWidth, height: label.offsetHeight,
+      })), width, height)
+      labels.forEach((label, i) => {
+        label.style.left = `${placed[i].x}px`
+        label.style.top = `${placed[i].y}px`
+      })
+    }
+    layout()
+    const observer = new ResizeObserver(layout)
+    for (const element of [graph, ...nodes, ...labels]) observer.observe(element)
+    return () => observer.disconnect()
+  }, [stage])
   return (
-    <div className="infra-graph">
+    <div className="infra-graph" ref={graphRef}>
+      <div className="infra-canvas" ref={canvasRef}>
       <div className="grid-plane" />
       <svg className="connection-layer" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-        <g className="customer-edge">
-          <line x1={customerPosition.x} y1={customerPosition.y} x2={customerTarget.position.x} y2={customerTarget.position.y} vectorEffect="non-scaling-stroke" />
-          <text x={(customerPosition.x + customerTarget.position.x) / 2} y={(customerPosition.y + customerTarget.position.y) / 2 + 4}>NORMAL ACCESS</text>
-          <circle r="0.75"><animateMotion dur="1.8s" repeatCount="indefinite" path={`M ${customerPosition.x} ${customerPosition.y} L ${customerTarget.position.x} ${customerTarget.position.y}`} /></circle>
-        </g>
-        {stage.infra.connections.map((edge) => {
-          const from = stage.infra.servers.find((server) => server.id === edge.from)!
-          const to = stage.infra.servers.find((server) => server.id === edge.to)!
-          const hot = activeTarget === to.id || activeTarget === from.id
-          const threat = from.status === 'restricted'
-          return (
-            <g key={`${edge.from}-${edge.to}`} className={`${threat ? 'threat-edge' : ''} ${hot ? 'hot-edge' : ''}`}>
-              <line x1={from.position.x} y1={from.position.y} x2={to.position.x} y2={to.position.y} vectorEffect="non-scaling-stroke" />
-              <text x={(from.position.x + to.position.x) / 2} y={(from.position.y + to.position.y) / 2 - 2}>{edge.label}</text>
-              {threat && <circle r="0.75"><animateMotion dur="1.45s" repeatCount="indefinite" path={`M ${from.position.x} ${from.position.y} L ${to.position.x} ${to.position.y}`} /></circle>}
-            </g>
-          )
-        })}
+        {edges.map((edge, index) => (
+          <g key={index} className={edge.kind}>
+            <line x1={edge.from.x} y1={edge.from.y} x2={edge.to.x} y2={edge.to.y} vectorEffect="non-scaling-stroke" />
+            {edge.animated && <circle r="0.75"><animateMotion dur="1.8s" repeatCount="indefinite" path={`M ${edge.from.x} ${edge.from.y} L ${edge.to.x} ${edge.to.y}`} /></circle>}
+          </g>
+        ))}
       </svg>
+      {edges.map((edge, index) => (
+        <span key={index} className={`connection-label ${edge.kind}`}>{edge.label}</span>
+      ))}
       <div className="infra-node customer-node" style={{ left: `${customerPosition.x}%`, top: `${customerPosition.y}%` }} aria-label="正規利用客がサービスにアクセス中">
         <span className="node-icon"><UsersRound size={20} /></span>
         <span className="node-copy"><strong>CUSTOMER</strong><small>正規利用客</small><code>ACCESSING...</code></span>
@@ -638,6 +679,7 @@ function InfraGraph({ stage, selectedId, onSelect, results, playhead }: { stage:
       })}
       <div className="zone-label zone-wan">EXTERNAL ACCESS</div>
       <div className="zone-label zone-internal">SESSION NETWORK / ISOLATED</div>
+      </div>
     </div>
   )
 }
