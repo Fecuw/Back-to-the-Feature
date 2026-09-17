@@ -536,22 +536,23 @@ function Timeline({
   stage: LoadedStage; phase: Phase; playhead: number; maxTime: number; results: AttackResult[]; selectedCheckpoint: string
   onSelectCheckpoint: (id: string) => void; onRewind: () => void; onSimulate: () => void; canSimulate: boolean
 }) {
-  const resultByNode = Object.fromEntries(results.map((result) => [result.nodeId, result]))
+  const visibleResults = results.filter((result) => phase === 'EDITING' ? result.time < playhead : result.time <= playhead)
+  const resultByNode = Object.fromEntries(visibleResults.map((result) => [result.nodeId, result]))
+  const currentResult = visibleResults[visibleResults.length - 1]
+  const checkpoint = [...stage.checkpoints].reverse().find((item) => item.time <= playhead)
+  const phaseLabel = {
+    INITIALIZING: '準備中', OBSERVING: '攻撃を観察中', EDITING: '対策を編集中',
+    SIMULATING: '検証中', CLEARED: '検証完了', FAILED: '検証終了',
+  }[phase]
+  const currentTitle = phase === 'INITIALIZING' ? '環境を準備しています'
+    : phase === 'EDITING' ? checkpoint?.label ?? '対策を編集中'
+    : currentResult ? stage.scenario.nodes[currentResult.nodeId].title : '平常稼働'
   return (
-    <section className="timeline-panel">
+    <section className="timeline-panel" aria-label="攻撃タイムライン">
       <div className="timeline-heading">
-        <div><History size={16} /><strong>INCIDENT TIMELINE</strong></div>
-        <div className="attack-tree">
-          {Object.entries(stage.scenario.nodes).map(([id, node], index) => {
-            const result = resultByNode[id]
-            return (
-              <div key={id} className={`attack-step ${result?.status ?? 'pending'}`}>
-                {result?.status === 'blocked' ? <Shield size={13} /> : result?.status === 'success' ? <ShieldAlert size={13} /> : <span />}
-                <b>{node.title}</b>
-                {index < Object.keys(stage.scenario.nodes).length - 1 && <ChevronRight size={12} />}
-              </div>
-            )
-          })}
+        <div className="timeline-current" aria-live="polite">
+          <span><History size={14} /> 今の段階 · {phaseLabel}</span>
+          <strong>{currentTitle}</strong>
         </div>
         <div className="timeline-actions">
           {phase === 'EDITING' ? (
@@ -561,6 +562,21 @@ function Timeline({
           )}
         </div>
       </div>
+      <div className="attack-tree" aria-label="攻撃段階の進行状況">
+        {Object.entries(stage.scenario.nodes).map(([id, node]) => {
+          const result = resultByNode[id]
+          const current = phase !== 'EDITING' && currentResult?.nodeId === id
+          const state = current ? 'current' : result ? 'completed' : 'pending'
+          const status = result ? result.status === 'blocked' ? '遮断' : '攻撃成功' : '未到達'
+          return (
+            <div key={id} className={`attack-step ${state} ${result?.status ?? ''}`} aria-current={current ? 'step' : undefined}>
+              <span className="step-symbol">{current ? <Play size={12} fill="currentColor" /> : result ? <Check size={13} /> : <span />}</span>
+              <b>{node.title}</b>
+              <small>{result ? `${current ? '現在' : '完了'} · ${status}` : status}</small>
+            </div>
+          )
+        })}
+      </div>
       <div className="timeline-track-wrap">
         <div className="timeline-track">
           <div className="timeline-progress" style={{ width: `${Math.min(100, (playhead / maxTime) * 100)}%` }} />
@@ -568,13 +584,15 @@ function Timeline({
           {stage.checkpoints.map((checkpoint) => (
             <button
               key={checkpoint.id}
-              className={`checkpoint ${selectedCheckpoint === checkpoint.id ? 'selected' : ''}`}
+              className={`checkpoint ${selectedCheckpoint === checkpoint.id ? 'selected' : checkpoint.time <= playhead ? 'completed' : 'pending'}`}
+              aria-pressed={selectedCheckpoint === checkpoint.id}
+              aria-label={`${checkpoint.label}：${selectedCheckpoint === checkpoint.id ? '選択中' : checkpoint.time <= playhead ? '到達済み' : '未到達'}`}
               style={{ left: `${(checkpoint.time / maxTime) * 100}%` }}
               onClick={() => onSelectCheckpoint(checkpoint.id)}
               title={checkpoint.label}
             >
-              <i />
-              <span>{checkpoint.id.toUpperCase()}</span>
+              <i>{selectedCheckpoint === checkpoint.id ? <Play size={9} fill="currentColor" /> : checkpoint.time <= playhead ? <Check size={11} /> : null}</i>
+              <span>{checkpoint.id.toUpperCase()} · {selectedCheckpoint === checkpoint.id ? '選択中' : checkpoint.time <= playhead ? '到達済み' : '未到達'}</span>
               <small>{checkpoint.label}</small>
             </button>
           ))}

@@ -89,7 +89,7 @@ select:focus-visible {
   height: 100vh;
   min-height: 720px;
   display: grid;
-  grid-template-rows: 58px 44px 130px minmax(180px, 1fr) var(--console-height, 230px);
+  grid-template-rows: 58px 44px 230px minmax(180px, 1fr) var(--console-height, 230px);
   overflow: hidden;
 }
 
@@ -638,66 +638,58 @@ select:focus-visible {
 }
 
 .timeline-heading {
-  height: 34px;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
 }
 
-.timeline-heading>div:first-child {
-  min-width: 172px;
+.timeline-current { min-width: 0; }
+.timeline-current > span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: var(--font-size-8);
+}
+.timeline-current > strong {
+  display: block;
+  margin-top: 3px;
+  color: var(--white);
+  font-size: var(--font-size-18);
+  line-height: 1.3;
+}
+.attack-tree {
   display: flex;
   gap: 8px;
-  align-items: center;
-  color: #8e989b;
-  font: 600 var(--font-size-9) "IBM Plex Mono", monospace;
-  padding-top: 7px;
+  margin-top: 10px;
+  overflow-x: auto;
 }
-
-.attack-tree {
-  min-width: 0;
-  flex: 1;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  overflow: hidden;
-}
-
 .attack-step {
-  height: 25px;
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding-left: 6px;
-  color: #596469;
+  gap: 7px;
+  padding: 7px 10px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: var(--font-size-8);
   white-space: nowrap;
-  font: 500 var(--font-size-8) "IBM Plex Mono", monospace;
 }
-
-.attack-step>span {
-  width: 7px;
-  height: 7px;
-  border: 1px solid #515b60;
-  border-radius: 50%;
+.attack-step small { font-size: var(--font-size-7); }
+.step-symbol { display: inline-flex; align-items: center; }
+.step-symbol > span { width: 9px; height: 9px; border: 1px solid currentColor; border-radius: 50%; }
+.attack-step.completed { border-style: solid; }
+.attack-step.success { color: var(--red); }
+.attack-step.blocked { color: var(--green); }
+.attack-step.current {
+  border: 2px solid var(--blue);
+  padding: 6px 9px;
+  background: var(--surface-2);
 }
-
-.attack-step svg:last-child {
-  color: #343c41;
-  margin-left: 1px;
-}
-
-.attack-step.success {
-  color: var(--red);
-}
-
-.attack-step.blocked {
-  color: var(--green);
-}
-
-.timeline-actions {
-  width: 194px;
-  display: flex;
-  justify-content: flex-end;
-}
+.attack-step.current .step-symbol { color: var(--blue); }
+.timeline-actions { flex-shrink: 0; display: flex; justify-content: flex-end; }
 
 .primary-button,
 .secondary-button,
@@ -751,7 +743,7 @@ select:focus-visible {
 
 .timeline-track-wrap {
   height: 65px;
-  padding: 25px 18px 0 48px;
+  padding: 28px 24px 0 76px;
 }
 
 .timeline-track {
@@ -801,8 +793,8 @@ select:focus-visible {
 .checkpoint {
   position: absolute;
   top: -7px;
-  width: 78px;
-  margin-left: -39px;
+  width: 140px;
+  margin-left: -70px;
   padding: 0;
   border: 0;
   background: transparent;
@@ -812,14 +804,20 @@ select:focus-visible {
 }
 
 .checkpoint i {
-  display: block;
-  width: 9px;
-  height: 9px;
-  margin: 3px auto 7px;
-  border: 2px solid #566168;
-  background: #0b0e10;
-  transform: rotate(45deg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin: 0 auto 5px;
+  border: 1px dashed var(--muted);
+  border-radius: 50%;
+  color: var(--muted);
+  background: var(--surface);
 }
+.checkpoint.completed { color: var(--green); }
+.checkpoint.completed i { border-style: solid; border-color: var(--green); color: var(--green); }
+.checkpoint.selected i { border-radius: 3px; border-style: solid; color: var(--blue); }
 
 .checkpoint span {
   display: block;
@@ -1105,14 +1103,14 @@ select:focus-visible {
 .node-copy small {
   overflow: hidden;
   text-overflow: ellipsis;
-  color: #798488;
+  color: #cbd6da;
   font-size: var(--font-size-8);
   white-space: nowrap;
   margin-top: 2px;
 }
 
 .node-copy code {
-  color: #505c61;
+  color: #7b8b91;
   font: 500 var(--font-size-7) "IBM Plex Mono", monospace;
   margin-top: 3px;
 }
@@ -2408,9 +2406,7 @@ select:focus-visible {
     grid-template-columns: minmax(600px, 1fr) 330px;
   }
 
-  .attack-step b {
-    display: none;
-  }
+
 }
 
 @media (max-width: 760px) {
