@@ -1052,7 +1052,8 @@ select:focus-visible {
 
 .infra-node.selected {
   border-color: var(--blue);
-  box-shadow: 0 0 0 1px rgba(120, 165, 250, .2), 0 4px 15px rgba(0, 0, 0, .4);
+  outline: 1px solid var(--blue);
+  outline-offset: 2px;
 }
 
 .infra-node.targeted.success {
@@ -1096,15 +1097,16 @@ select:focus-visible {
 .node-copy strong {
   overflow: hidden;
   text-overflow: ellipsis;
-  color: #dce2e1;
-  font: 600 var(--font-size-9) "IBM Plex Mono", monospace;
+  color: var(--white);
+  white-space: nowrap;
+  font: 700 var(--font-size-10) "IBM Plex Mono", monospace;
 }
 
 .node-copy small {
   overflow: hidden;
   text-overflow: ellipsis;
-  color: #cbd6da;
-  font-size: var(--font-size-8);
+  color: #9aa8af;
+  font-size: var(--font-size-7);
   white-space: nowrap;
   margin-top: 2px;
 }
