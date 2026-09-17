@@ -71,7 +71,7 @@ export function TerminalPanel({ server, stage, settings, active, connection, onC
       cursorBlink: true,
       convertEol: true,
       fontFamily: '"IBM Plex Mono", "SFMono-Regular", Consolas, monospace',
-      fontSize: 12,
+      fontSize: Number.parseFloat(getComputedStyle(mountRef.current).fontSize),
       lineHeight: 1.45,
       scrollback: 1500,
       theme: {
