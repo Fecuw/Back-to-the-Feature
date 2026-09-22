@@ -276,6 +276,7 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
   const [systemFailure, setSystemFailure] = useState<{ serverId: string; command: 'shutdown' | 'reboot' } | null>(null)
   const [consoleHeight, setConsoleHeight] = useState(defaultConsoleHeight)
   const [consoleLayout, setConsoleLayout] = useState(loadConsoleLayout)
+  const [timeJump, setTimeJump] = useState<TimeJumpInfo | null>(null)
   const [runtime, setRuntime] = useState<{
     status: 'local' | 'connecting' | 'live' | 'error'
     sessionId?: string
@@ -283,6 +284,8 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
     message?: string
   }>({ status: apiUrl ? 'connecting' : 'local' })
   const startedAt = useRef(Date.now())
+  const lastDeparted = useRef<number | null>(null)
+  const jumpCount = useRef(0)
   const timers = useRef<number[]>([])
   const gameShellRef = useRef<HTMLDivElement>(null)
   const consoleResizeDrag = useRef<{ startY: number; startHeight: number } | null>(null)
@@ -404,8 +407,19 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
     }
   }, [stage.id])
 
+  const startTimeJump = () => {
+    const checkpoint = stage.checkpoints.find((item) => item.id === selectedCheckpoint)!
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      rewind()
+      return
+    }
+    setTimeJump({ from: playhead, to: checkpoint.time, checkpointId: checkpoint.id, lastDeparted: lastDeparted.current, short: jumpCount.current > 0 })
+  }
+
   const rewind = () => {
     const checkpoint = stage.checkpoints.find((item) => item.id === selectedCheckpoint)!
+    lastDeparted.current = playhead
+    jumpCount.current += 1
     setPhase('EDITING')
     setPlayhead(checkpoint.time)
     setConsoleTab('terminal')
@@ -525,7 +539,7 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
         results={results}
         selectedCheckpoint={selectedCheckpoint}
         onSelectCheckpoint={setSelectedCheckpoint}
-        onRewind={rewind}
+        onRewind={startTimeJump}
         onSimulate={simulate}
         canSimulate={phase === 'EDITING'}
       />
@@ -657,6 +671,7 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
       {hintOpen && <HintDrawer hints={revealedHints} onReveal={revealHint} hasMore={revealedHints.length < Object.values(stage.scenario.nodes).flatMap((node) => node.hints).length} onClose={() => setHintOpen(false)} />}
       {resultDialog && <ResultDialog result={resultDialog} stage={stage} elapsed={elapsed} hints={revealedHints.length} onClose={() => setResultDialog(null)} onExit={onExit} onReset={onReset} />}
       {systemFailure && <SystemFailureDialog failure={systemFailure} stage={stage} onExit={onExit} onReset={onReset} />}
+      {timeJump && <TimeJump jump={timeJump} onJump={rewind} onDone={() => setTimeJump(null)} />}
       {confirmReset && <ConfirmDialog title="ステージをリセット" body="現在の設定変更と調査ログは破棄され、初期状態から再開します。" confirm="リセット" onCancel={() => setConfirmReset(false)} onConfirm={onReset} />}
       {phase === 'INITIALIZING' && <div className="initializing-overlay"><div className="loader-ring" /><strong>ISOLATED RANGE</strong><span>コンテナ構成を復元しています</span></div>}
     </div>
@@ -675,6 +690,97 @@ function PhaseSteps({ phase }: { phase: Phase }) {
         </li>
       ))}
     </ol>
+  )
+}
+
+interface TimeJumpInfo {
+  from: number
+  to: number
+  checkpointId: string
+  lastDeparted: number | null
+  short: boolean
+}
+
+const formatGameTime = (seconds: number | null) => seconds === null ? '--:--' : `00:${String(seconds).padStart(2, '0')}`
+
+function TimeJump({ jump, onJump, onDone }: { jump: TimeJumpInfo; onJump: () => void; onDone: () => void }) {
+  const jumpAt = jump.short ? 120 : 1450
+  const doneAt = jump.short ? 800 : 2300
+  const [speed, setSpeed] = useState(jump.short ? 88 : 0)
+  const [jumpStage, setJumpStage] = useState<'charging' | 'jumped'>(jump.short ? 'jumped' : 'charging')
+  const jumped = useRef(false)
+  const skipRef = useRef<() => void>(() => undefined)
+  const callbacks = useRef({ onJump, onDone })
+  callbacks.current = { onJump, onDone }
+
+  useEffect(() => {
+    const fire = () => {
+      if (jumped.current) return
+      jumped.current = true
+      setSpeed(88)
+      setJumpStage('jumped')
+      callbacks.current.onJump()
+    }
+    const finish = () => {
+      fire()
+      callbacks.current.onDone()
+    }
+    const startedAt = performance.now()
+    let frame = 0
+    const tick = (now: number) => {
+      const progress = Math.min(1, (now - startedAt) / jumpAt)
+      if (!jumped.current) setSpeed(Math.floor(88 * progress * progress))
+      if (progress < 1) frame = requestAnimationFrame(tick)
+    }
+    if (!jump.short) frame = requestAnimationFrame(tick)
+    const jumpTimer = window.setTimeout(fire, jumpAt)
+    const doneTimer = window.setTimeout(finish, doneAt)
+    const skip = (event: KeyboardEvent) => { if (event.key === 'Escape') finish() }
+    window.addEventListener('keydown', skip)
+    skipRef.current = finish
+    return () => {
+      cancelAnimationFrame(frame)
+      window.clearTimeout(jumpTimer)
+      window.clearTimeout(doneTimer)
+      window.removeEventListener('keydown', skip)
+    }
+  }, [jump, jumpAt, doneAt])
+
+  const rows = [
+    { key: 'destination', label: 'DESTINATION TIME', tag: jump.checkpointId.toUpperCase(), time: formatGameTime(jump.to) },
+    { key: 'present', label: 'PRESENT TIME', tag: 'NOW', time: formatGameTime(jump.from) },
+    { key: 'departed', label: 'LAST TIME DEPARTED', tag: jump.lastDeparted === null ? '---' : 'PREV', time: formatGameTime(jump.lastDeparted) },
+  ]
+
+  return (
+    <div
+      className={`time-jump ${jump.short ? 'short' : ''} ${jumpStage} ${speed >= 60 ? 'shaking' : ''}`}
+      role="status"
+      aria-live="polite"
+      aria-label={`${jump.checkpointId.toUpperCase()} へ時間移動中`}
+      title="クリックでスキップ"
+      onClick={() => skipRef.current()}
+    >
+      {!jump.short && (
+        <div className="time-circuits">
+          {rows.map((row) => (
+            <div className={`circuit-row circuit-${row.key}`} key={row.key}>
+              <div className="circuit-digits"><span>{row.tag}</span><span>{row.time}</span></div>
+              <div className="circuit-label">{row.label}</div>
+            </div>
+          ))}
+          <div className="speedometer"><strong>{String(speed).padStart(2, '0')}</strong><span>MPH</span></div>
+          <svg className="time-sparks" viewBox="0 0 400 200" preserveAspectRatio="none" aria-hidden="true">
+            <polyline points="10,40 60,55 45,80 110,95 90,120 150,140" />
+            <polyline points="390,30 340,60 360,85 300,100 320,130 250,160" />
+            <polyline points="200,0 185,40 215,60 190,100 210,130 195,200" />
+          </svg>
+        </div>
+      )}
+      <div className="time-flash" />
+      <div className="fire-trail fire-trail-a" />
+      <div className="fire-trail fire-trail-b" />
+    </div>
   )
 }
 

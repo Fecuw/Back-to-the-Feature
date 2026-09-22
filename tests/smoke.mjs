@@ -107,7 +107,7 @@ if (await page.getByRole('button', { name: '防御設定' }).count()) throw new 
 if (await page.getByRole('button', { name: '設定を適用' }).count()) throw new Error('defense apply button is still rendered')
 
 await page.getByRole('button', { name: '過去へ戻る' }).click()
-await page.getByText('対策フェーズ').waitFor()
+await page.locator('.phase-badge', { hasText: '対策フェーズ' }).waitFor()
 
 await page.locator('.terminal-switcher button').filter({ hasText: 'EDGE-01' }).click()
 await page.locator('.terminal-mount:not([hidden]) .xterm-helper-textarea').focus()
@@ -131,6 +131,7 @@ await page.screenshot({ path: 'game-sla-failed.png', fullPage: true })
 await page.getByRole('button', { name: '対策を続ける' }).click()
 
 await page.getByRole('button', { name: '過去へ戻る' }).click()
+await page.locator('.phase-badge', { hasText: '対策フェーズ' }).waitFor()
 await page.locator('.terminal-mount:not([hidden]) .xterm-helper-textarea').focus()
 await page.keyboard.type('config set service_online.conf service_online on')
 await page.keyboard.press('Enter')
