@@ -5,6 +5,7 @@ import {
   Check,
   CheckCircle2,
   ChevronRight,
+  ChevronUp,
   CircleAlert,
   Clock3,
   Database,
@@ -15,9 +16,12 @@ import {
   History,
   KeyRound,
   Lightbulb,
+  Minus,
   LogOut,
   MessageSquareWarning,
   Network,
+  PanelBottom,
+  PictureInPicture2,
   Play,
   RotateCcw,
   Search,
@@ -57,6 +61,46 @@ const phaseLabels: Record<Phase, string> = {
 }
 
 const danger = new Set(['medium', 'high', 'critical'])
+
+interface ConsoleLayout {
+  mode: 'docked' | 'floating'
+  minimized: boolean
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+const consoleLayoutKey = 'btf-console-layout'
+const floatingMinWidth = 520
+const floatingMinHeight = 180
+const consoleToolbarHeight = 37
+const resizeDirections = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'] as const
+type ResizeDirection = typeof resizeDirections[number]
+
+function clampFloatingConsole(layout: ConsoleLayout): ConsoleLayout {
+  const width = Math.min(Math.max(layout.width, floatingMinWidth), window.innerWidth - 16)
+  const height = Math.min(Math.max(layout.height, floatingMinHeight), window.innerHeight - 16)
+  return {
+    ...layout,
+    width,
+    height,
+    x: Math.min(Math.max(layout.x, 0), window.innerWidth - width),
+    y: Math.min(Math.max(layout.y, 0), window.innerHeight - consoleToolbarHeight),
+  }
+}
+
+function loadConsoleLayout(): ConsoleLayout {
+  const width = 720
+  const height = 340
+  const fallback: ConsoleLayout = { mode: 'docked', minimized: false, x: window.innerWidth - width - 24, y: window.innerHeight - height - 24, width, height }
+  try {
+    const stored = JSON.parse(localStorage.getItem(consoleLayoutKey) ?? 'null')
+    return clampFloatingConsole(stored ? { ...fallback, ...stored } : fallback)
+  } catch {
+    return clampFloatingConsole(fallback)
+  }
+}
 
 function formatDuration(seconds: number) {
   const minutes = Math.floor(seconds / 60)
@@ -231,6 +275,7 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
   const [confirmReset, setConfirmReset] = useState(false)
   const [systemFailure, setSystemFailure] = useState<{ serverId: string; command: 'shutdown' | 'reboot' } | null>(null)
   const [consoleHeight, setConsoleHeight] = useState(defaultConsoleHeight)
+  const [consoleLayout, setConsoleLayout] = useState(loadConsoleLayout)
   const [runtime, setRuntime] = useState<{
     status: 'local' | 'connecting' | 'live' | 'error'
     sessionId?: string
@@ -241,6 +286,7 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
   const timers = useRef<number[]>([])
   const gameShellRef = useRef<HTMLDivElement>(null)
   const consoleResizeDrag = useRef<{ startY: number; startHeight: number } | null>(null)
+  const floatingDrag = useRef<{ direction: ResizeDirection | 'move'; startX: number; startY: number; start: ConsoleLayout } | null>(null)
   const finish = useProgress((state) => state.finish)
 
   const selectedServer = stage.infra.servers.find((server) => server.id === selectedServerId) ?? stage.infra.servers[0]
@@ -269,8 +315,54 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
     }
   }
 
+  const floating = consoleLayout.mode === 'floating'
+  const updateConsoleLayout = (patch: Partial<ConsoleLayout>) => setConsoleLayout((current) => clampFloatingConsole({ ...current, ...patch }))
+
+  const startFloatingDrag = (direction: ResizeDirection | 'move', event: React.PointerEvent<HTMLElement>) => {
+    floatingDrag.current = { direction, startX: event.clientX, startY: event.clientY, start: consoleLayout }
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+  const moveFloatingDrag = (event: React.PointerEvent<HTMLElement>) => {
+    const drag = floatingDrag.current
+    if (!drag) return
+    const dx = event.clientX - drag.startX
+    const dy = event.clientY - drag.startY
+    const { start, direction } = drag
+    if (direction === 'move') {
+      updateConsoleLayout({ x: start.x + dx, y: start.y + dy })
+      return
+    }
+    const next = { ...start }
+    if (direction.includes('e')) next.width = start.width + dx
+    if (direction.includes('s')) next.height = start.height + dy
+    if (direction.includes('w')) {
+      next.width = Math.max(floatingMinWidth, start.width - dx)
+      next.x = start.x + start.width - next.width
+    }
+    if (direction.includes('n')) {
+      next.height = Math.max(floatingMinHeight, start.height - dy)
+      next.y = start.y + start.height - next.height
+    }
+    setConsoleLayout(clampFloatingConsole(next))
+  }
+  const endFloatingDrag = (event: React.PointerEvent<HTMLElement>) => {
+    floatingDrag.current = null
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+  }
+
   useEffect(() => {
-    const keepConsoleInBounds = () => setConsoleHeight((height) => clampConsoleHeight(height))
+    try {
+      localStorage.setItem(consoleLayoutKey, JSON.stringify(consoleLayout))
+    } catch {
+      // Layout persistence is a convenience; ignore unavailable storage.
+    }
+  }, [consoleLayout])
+
+  useEffect(() => {
+    const keepConsoleInBounds = () => {
+      setConsoleHeight((height) => clampConsoleHeight(height))
+      setConsoleLayout((layout) => clampFloatingConsole(layout))
+    }
     window.addEventListener('resize', keepConsoleInBounds)
     return () => window.removeEventListener('resize', keepConsoleInBounds)
   }, [])
@@ -406,7 +498,7 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
   })
 
   return (
-    <div ref={gameShellRef} className="shell game-shell" style={{ '--stage-accent': stage.accent, '--console-height': `${consoleHeight}px` } as React.CSSProperties}>
+    <div ref={gameShellRef} className="shell game-shell" style={{ '--stage-accent': stage.accent, '--console-height': floating ? '0px' : `${consoleHeight}px` } as React.CSSProperties}>
       <header className="app-header game-header">
         <button className="back-button" onClick={onExit} title="ステージ一覧"><ArrowLeft size={18} /></button>
         <Brand />
@@ -457,8 +549,22 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
         </aside>
       </main>
 
-      <section className="console-panel panel">
-        <button
+      <section
+        className={`console-panel panel ${floating ? 'floating' : ''} ${floating && consoleLayout.minimized ? 'minimized' : ''}`}
+        style={floating ? { left: consoleLayout.x, top: consoleLayout.y, width: consoleLayout.width, height: consoleLayout.minimized ? consoleToolbarHeight : consoleLayout.height } : undefined}
+      >
+        {floating && !consoleLayout.minimized && resizeDirections.map((direction) => (
+          <span
+            key={direction}
+            className={`float-resize float-resize-${direction}`}
+            aria-hidden="true"
+            onPointerDown={(event) => startFloatingDrag(direction, event)}
+            onPointerMove={moveFloatingDrag}
+            onPointerUp={endFloatingDrag}
+            onPointerCancel={() => { floatingDrag.current = null }}
+          />
+        ))}
+        {!floating && <button
           className="console-resize-handle"
           type="button"
           role="separator"
@@ -483,8 +589,21 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
             if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
           }}
           onPointerCancel={() => { consoleResizeDrag.current = null }}
-        ><span /></button>
-        <div className="console-toolbar">
+        ><span /></button>}
+        <div
+          className="console-toolbar"
+          title={floating ? '空いている部分をドラッグして移動' : undefined}
+          onPointerDown={(event) => {
+            if (!floating || (event.target as HTMLElement).closest('button, input, select, label')) return
+            startFloatingDrag('move', event)
+          }}
+          onPointerMove={moveFloatingDrag}
+          onPointerUp={endFloatingDrag}
+          onPointerCancel={() => { floatingDrag.current = null }}
+          onDoubleClick={(event) => {
+            if (floating && !(event.target as HTMLElement).closest('button, input, select, label')) updateConsoleLayout({ minimized: !consoleLayout.minimized })
+          }}
+        >
           <div className="tab-list console-tabs">
             <button className={consoleTab === 'logs' ? 'active' : ''} onClick={() => setConsoleTab('logs')}><FileCode2 size={15} /> イベントログ <span>{logs.length}</span></button>
             <button className={consoleTab === 'terminal' ? 'active' : ''} onClick={() => setConsoleTab('terminal')}><TerminalSquare size={15} /> ターミナル</button>
@@ -503,6 +622,20 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
               <div className={`runtime-status runtime-${runtime.status}`} title={runtime.message}><i /><strong>{runtime.status === 'live' ? 'LIVE DOCKER' : runtime.status === 'connecting' ? 'CONNECTING' : runtime.status === 'error' ? 'LOCAL FALLBACK' : 'LOCAL SIM'}</strong></div>
             </div>
           )}
+          <div className="console-window-controls">
+            {floating && (
+              <button onClick={() => updateConsoleLayout({ minimized: !consoleLayout.minimized })} title={consoleLayout.minimized ? '元のサイズに戻す' : '最小化'} aria-label={consoleLayout.minimized ? '元のサイズに戻す' : '最小化'}>
+                {consoleLayout.minimized ? <ChevronUp size={15} /> : <Minus size={15} />}
+              </button>
+            )}
+            <button
+              onClick={() => updateConsoleLayout(floating ? { mode: 'docked', minimized: false } : { mode: 'floating' })}
+              title={floating ? '画面下部に戻す' : 'ウィンドウとして切り離す'}
+              aria-label={floating ? '画面下部に戻す' : 'ウィンドウとして切り離す'}
+            >
+              {floating ? <PanelBottom size={15} /> : <PictureInPicture2 size={15} />}
+            </button>
+          </div>
         </div>
         <div className="console-body">
           {consoleTab === 'logs' && <LogViewer logs={filteredLogs} loading={phase === 'INITIALIZING'} />}
