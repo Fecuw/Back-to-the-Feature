@@ -536,7 +536,7 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
             <div><Network size={16} /><strong>INFRASTRUCTURE</strong><span>SESSION / {stage.id.toUpperCase()}</span></div>
             <div className="map-legend"><span><i className="online-dot" /> 正規アクセス</span><span><i className="attack-dot" /> 攻撃者アクセス</span></div>
           </div>
-          <InfraGraph stage={stage} selectedId={selectedServerId} onSelect={setSelectedServerId} results={results} playhead={playhead} />
+          <InfraGraph stage={stage} selectedId={selectedServerId} terminalId={consoleTab === 'terminal' ? terminalServer.id : null} onSelect={setSelectedServerId} results={results} playhead={playhead} />
         </section>
 
         <aside className="detail-panel panel">
@@ -735,7 +735,7 @@ function Timeline({
   )
 }
 
-function InfraGraph({ stage, selectedId, onSelect, results, playhead }: { stage: LoadedStage; selectedId: string; onSelect: (id: string) => void; results: AttackResult[]; playhead: number }) {
+function InfraGraph({ stage, selectedId, terminalId, onSelect, results, playhead }: { stage: LoadedStage; selectedId: string; terminalId: string | null; onSelect: (id: string) => void; results: AttackResult[]; playhead: number }) {
   const activeResult = [...results].reverse().find((result) => result.time <= playhead)
   const activeTarget = activeResult ? stage.scenario.nodes[activeResult.nodeId].target : null
   const customerTarget = stage.infra.servers.find((server) => server.id === stage.availability_checks[0]?.target) ?? stage.infra.servers.find((server) => server.status === 'online') ?? stage.infra.servers[0]
@@ -785,6 +785,7 @@ function InfraGraph({ stage, selectedId, onSelect, results, playhead }: { stage:
             <span className="node-copy"><strong>{server.label}</strong><small>{server.role}</small><code>{server.ip}</code></span>
             <i className="node-status" />
             {server.status === 'restricted' && <span className="threat-label">ATTACKER</span>}
+            {terminalId === server.id && <span className="terminal-badge"><TerminalSquare size={11} /> TERMINAL</span>}
             {isTarget && <span className="pulse-ring" />}
           </button>
         )

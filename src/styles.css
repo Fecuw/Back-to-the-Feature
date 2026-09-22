@@ -192,6 +192,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .node-status { width: 5px; height: 5px; position: absolute; right: 5px; top: 5px; border-radius: 50%; background: var(--green); }
 .restricted .node-status { background: var(--red); }
 .threat-label { position: absolute; left: 8px; top: -9px; padding: 1px 5px; background: #1b1111; border: 1px solid #71372f; color: var(--red); font: 600 9px "IBM Plex Mono", monospace; letter-spacing: .08em; }
+.terminal-badge { position: absolute; right: 16px; top: -10px; display: flex; align-items: center; gap: 4px; padding: 1px 6px; color: #08100e; background: var(--green); font: 600 9px "IBM Plex Mono", monospace; letter-spacing: .04em; }
 .customer-node { cursor: default; border-color: #347063; background: #0f1c19; box-shadow: 0 0 16px rgba(115,224,193,.09); }
 .customer-node:hover { border-color: #347063; background: #0f1c19; }
 .customer-node .node-icon { color: var(--green); border-color: #31574d; background: #10231e; }
