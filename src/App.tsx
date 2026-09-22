@@ -252,7 +252,7 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
 
   const maximumConsoleHeight = () => {
     const shellHeight = gameShellRef.current?.getBoundingClientRect().height ?? window.innerHeight
-    return Math.max(minimumConsoleHeight, Math.min(520, shellHeight - 58 - 44 - 130 - 180))
+    return Math.max(minimumConsoleHeight, Math.min(520, shellHeight - 58 - 48 - 140 - 180))
   }
   const clampConsoleHeight = (height: number) => Math.min(maximumConsoleHeight(), Math.max(minimumConsoleHeight, height))
   const resizeConsoleByKeyboard = (event: React.KeyboardEvent<HTMLButtonElement>) => {
@@ -420,7 +420,8 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
 
       <section className="operation-bar">
         <div className={`phase-badge phase-${phase.toLowerCase()}`}><span /> {phaseLabels[phase]}</div>
-        <div className="objective"><span>OBJECTIVE</span><strong>{stage.objective}</strong></div>
+        <PhaseSteps phase={phase} />
+        <div className="objective"><span>目標</span><strong title={stage.objective}>{stage.objective}</strong></div>
         <div className="availability"><Activity size={15} /><span>AVAILABILITY</span><strong>{systemFailure || !settings.service_online ? 'DOWN' : 'HEALTHY'}</strong></div>
       </section>
 
@@ -441,7 +442,7 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
         <section className="infra-panel panel">
           <div className="panel-header">
             <div><Network size={16} /><strong>INFRASTRUCTURE</strong><span>SESSION / {stage.id.toUpperCase()}</span></div>
-            <div className="map-legend"><span><i className="online-dot" /> CUSTOMER ACCESS</span><span><i className="attack-dot" /> ATTACKER ACCESS</span></div>
+            <div className="map-legend"><span><i className="online-dot" /> 正規アクセス</span><span><i className="attack-dot" /> 攻撃者アクセス</span></div>
           </div>
           <InfraGraph stage={stage} selectedId={selectedServerId} onSelect={setSelectedServerId} results={results} playhead={playhead} />
         </section>
@@ -452,7 +453,7 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
             <div><span>{selectedServer.role}</span><h2>{selectedServer.label}</h2><code>{selectedServer.ip}</code></div>
             <span className="online-label"><i /> ONLINE</span>
           </div>
-          <ServerDetails stage={stage} server={selectedServer} settings={settings} />
+          <ServerDetails stage={stage} server={selectedServer} settings={settings} editing={phase === 'EDITING'} onOpenTerminal={() => { setTerminalServerId(selectedServer.id); setConsoleTab('terminal') }} />
         </aside>
       </main>
 
@@ -529,6 +530,21 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
   )
 }
 
+const phaseSteps = ['攻撃を観察', '過去へ戻る', 'ターミナルで対策', 'シミュレーション検証']
+
+function PhaseSteps({ phase }: { phase: Phase }) {
+  const current = phase === 'EDITING' ? 2 : phase === 'SIMULATING' ? 3 : phase === 'CLEARED' ? phaseSteps.length : 0
+  return (
+    <ol className="phase-steps" aria-label="進め方">
+      {phaseSteps.map((label, index) => (
+        <li key={label} className={index < current ? 'done' : index === current ? 'current' : ''} aria-current={index === current ? 'step' : undefined}>
+          <span>{index < current ? <Check size={11} /> : index + 1}</span>{label}
+        </li>
+      ))}
+    </ol>
+  )
+}
+
 function Timeline({
   stage, phase, playhead, maxTime, results, selectedCheckpoint, onSelectCheckpoint, onRewind, onSimulate, canSimulate,
 }: {
@@ -597,7 +613,6 @@ function InfraGraph({ stage, selectedId, onSelect, results, playhead }: { stage:
       <svg className="connection-layer" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
         <g className="customer-edge">
           <line x1={customerPosition.x} y1={customerPosition.y} x2={customerTarget.position.x} y2={customerTarget.position.y} vectorEffect="non-scaling-stroke" />
-          <text x={(customerPosition.x + customerTarget.position.x) / 2} y={(customerPosition.y + customerTarget.position.y) / 2 + 4}>NORMAL ACCESS</text>
           <circle r="0.75"><animateMotion dur="1.8s" repeatCount="indefinite" path={`M ${customerPosition.x} ${customerPosition.y} L ${customerTarget.position.x} ${customerTarget.position.y}`} /></circle>
         </g>
         {stage.infra.connections.map((edge) => {
@@ -608,12 +623,17 @@ function InfraGraph({ stage, selectedId, onSelect, results, playhead }: { stage:
           return (
             <g key={`${edge.from}-${edge.to}`} className={`${threat ? 'threat-edge' : ''} ${hot ? 'hot-edge' : ''}`}>
               <line x1={from.position.x} y1={from.position.y} x2={to.position.x} y2={to.position.y} vectorEffect="non-scaling-stroke" />
-              <text x={(from.position.x + to.position.x) / 2} y={(from.position.y + to.position.y) / 2 - 2}>{edge.label}</text>
               {threat && <circle r="0.75"><animateMotion dur="1.45s" repeatCount="indefinite" path={`M ${from.position.x} ${from.position.y} L ${to.position.x} ${to.position.y}`} /></circle>}
             </g>
           )
         })}
       </svg>
+      <span className="edge-label customer" style={{ left: `${(customerPosition.x + customerTarget.position.x) / 2}%`, top: `${(customerPosition.y + customerTarget.position.y) / 2}%` }}>NORMAL ACCESS</span>
+      {stage.infra.connections.map((edge) => {
+        const from = stage.infra.servers.find((server) => server.id === edge.from)!
+        const to = stage.infra.servers.find((server) => server.id === edge.to)!
+        return <span key={`${edge.from}-${edge.to}`} className={`edge-label ${from.status === 'restricted' ? 'threat' : ''}`} style={{ left: `${(from.position.x + to.position.x) / 2}%`, top: `${(from.position.y + to.position.y) / 2}%` }}>{edge.label}</span>
+      })}
       <div className="infra-node customer-node" style={{ left: `${customerPosition.x}%`, top: `${customerPosition.y}%` }} aria-label="正規利用客がサービスにアクセス中">
         <span className="node-icon"><UsersRound size={20} /></span>
         <span className="node-copy"><strong>CUSTOMER</strong><small>正規利用客</small><code>ACCESSING...</code></span>
@@ -650,7 +670,7 @@ function ServerIcon({ server }: { server: ServerDefinition }) {
   return <Server size={20} />
 }
 
-function ServerDetails({ stage, server, settings }: { stage: LoadedStage; server: ServerDefinition; settings: Record<string, boolean> }) {
+function ServerDetails({ stage, server, settings, editing, onOpenTerminal }: { stage: LoadedStage; server: ServerDefinition; settings: Record<string, boolean>; editing: boolean; onOpenTerminal: () => void }) {
   const defenses = stage.defenses.filter((defense) => defense.serverId === server.id)
   return (
     <div className="server-details scroll-area">
@@ -661,7 +681,22 @@ function ServerDetails({ stage, server, settings }: { stage: LoadedStage; server
         <div><dt>SHELL</dt><dd>{server.shell ? 'ENABLED' : 'LOCKED'}</dd></div>
       </dl>
       <div className="detail-section"><h3>SERVICES</h3>{server.services.map((service, index) => <div className="service-row" key={service}><Activity size={14} /><strong>{service}</strong><span>RUNNING</span><code>{server.ports[index] ? `:${server.ports[index]}` : 'internal'}</code></div>)}</div>
-      <div className="detail-section"><h3>APPLIED DEFENSES</h3>{defenses.length ? defenses.map((defense) => <div className="applied-row" key={defense.id}><span className={settings[defense.id] ? 'enabled' : ''}>{settings[defense.id] ? <Check size={13} /> : <X size={13} />}</span><div><strong>{defense.label}</strong><small>{settings[defense.id] ? defense.onLabel : defense.offLabel}</small></div></div>) : <p className="empty-copy">編集可能な設定はありません。</p>}</div>
+      <div className="detail-section">
+        <h3>防御設定</h3>
+        {defenses.length ? (
+          <>
+            {defenses.map((defense) => (
+              <div className="applied-row" key={defense.id}>
+                <div><strong>{defense.label}</strong><small>{settings[defense.id] ? defense.onLabel : defense.offLabel}</small></div>
+                <span className={`state-pill ${settings[defense.id] ? 'enabled' : ''}`}>{settings[defense.id] ? 'ON' : 'OFF'}</span>
+                <code>config set {defense.id}.conf {defense.id} on|off</code>
+              </div>
+            ))}
+            <p className="defense-note">{editing ? '設定はこのノードのターミナルで上のコマンドを実行して変更します。' : '設定を変更するには、まず「過去へ戻る」で対策フェーズに入ってください。'}</p>
+            {server.shell && <button className="secondary-button open-terminal" onClick={onOpenTerminal}><TerminalSquare size={14} /> {server.label} のターミナルを開く</button>}
+          </>
+        ) : <p className="empty-copy">このノードに変更できる設定はありません。</p>}
+      </div>
     </div>
   )
 }
