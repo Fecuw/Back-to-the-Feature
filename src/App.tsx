@@ -5,6 +5,7 @@ import {
   Check,
   CheckCircle2,
   ChevronRight,
+  ChevronUp,
   CircleAlert,
   Clock3,
   Database,
@@ -15,9 +16,12 @@ import {
   History,
   KeyRound,
   Lightbulb,
+  Minus,
   LogOut,
   MessageSquareWarning,
   Network,
+  PanelBottom,
+  PictureInPicture2,
   Play,
   RotateCcw,
   Search,
@@ -58,6 +62,46 @@ const phaseLabels: Record<Phase, string> = {
 }
 
 const danger = new Set(['medium', 'high', 'critical'])
+
+interface ConsoleLayout {
+  mode: 'docked' | 'floating'
+  minimized: boolean
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+const consoleLayoutKey = 'btf-console-layout'
+const floatingMinWidth = 520
+const floatingMinHeight = 180
+const consoleToolbarHeight = 37
+const resizeDirections = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'] as const
+type ResizeDirection = typeof resizeDirections[number]
+
+function clampFloatingConsole(layout: ConsoleLayout): ConsoleLayout {
+  const width = Math.min(Math.max(layout.width, floatingMinWidth), window.innerWidth - 16)
+  const height = Math.min(Math.max(layout.height, floatingMinHeight), window.innerHeight - 16)
+  return {
+    ...layout,
+    width,
+    height,
+    x: Math.min(Math.max(layout.x, 0), window.innerWidth - width),
+    y: Math.min(Math.max(layout.y, 0), window.innerHeight - consoleToolbarHeight),
+  }
+}
+
+function loadConsoleLayout(): ConsoleLayout {
+  const width = 720
+  const height = 340
+  const fallback: ConsoleLayout = { mode: 'docked', minimized: false, x: window.innerWidth - width - 24, y: window.innerHeight - height - 24, width, height }
+  try {
+    const stored = JSON.parse(localStorage.getItem(consoleLayoutKey) ?? 'null')
+    return clampFloatingConsole(stored ? { ...fallback, ...stored } : fallback)
+  } catch {
+    return clampFloatingConsole(fallback)
+  }
+}
 
 function formatDuration(seconds: number) {
   const minutes = Math.floor(seconds / 60)
@@ -232,6 +276,8 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
   const [confirmReset, setConfirmReset] = useState(false)
   const [systemFailure, setSystemFailure] = useState<{ serverId: string; command: 'shutdown' | 'reboot' } | null>(null)
   const [consoleHeight, setConsoleHeight] = useState(defaultConsoleHeight)
+  const [consoleLayout, setConsoleLayout] = useState(loadConsoleLayout)
+  const [timeJump, setTimeJump] = useState<TimeJumpInfo | null>(null)
   const [runtime, setRuntime] = useState<{
     status: 'local' | 'connecting' | 'live' | 'error'
     sessionId?: string
@@ -239,9 +285,12 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
     message?: string
   }>({ status: apiUrl ? 'connecting' : 'local' })
   const startedAt = useRef(Date.now())
+  const lastDeparted = useRef<number | null>(null)
+  const jumpCount = useRef(0)
   const timers = useRef<number[]>([])
   const gameShellRef = useRef<HTMLDivElement>(null)
   const consoleResizeDrag = useRef<{ startY: number; startHeight: number } | null>(null)
+  const floatingDrag = useRef<{ direction: ResizeDirection | 'move'; startX: number; startY: number; start: ConsoleLayout } | null>(null)
   const finish = useProgress((state) => state.finish)
 
   const selectedServer = stage.infra.servers.find((server) => server.id === selectedServerId) ?? stage.infra.servers[0]
@@ -253,7 +302,7 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
 
   const maximumConsoleHeight = () => {
     const shellHeight = gameShellRef.current?.getBoundingClientRect().height ?? window.innerHeight
-    return Math.max(minimumConsoleHeight, Math.min(520, shellHeight - 58 - 44 - 130 - 180))
+    return Math.max(minimumConsoleHeight, Math.min(520, shellHeight - 58 - 48 - 140 - 180))
   }
   const clampConsoleHeight = (height: number) => Math.min(maximumConsoleHeight(), Math.max(minimumConsoleHeight, height))
   const resizeConsoleByKeyboard = (event: React.KeyboardEvent<HTMLButtonElement>) => {
@@ -270,8 +319,54 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
     }
   }
 
+  const floating = consoleLayout.mode === 'floating'
+  const updateConsoleLayout = (patch: Partial<ConsoleLayout>) => setConsoleLayout((current) => clampFloatingConsole({ ...current, ...patch }))
+
+  const startFloatingDrag = (direction: ResizeDirection | 'move', event: React.PointerEvent<HTMLElement>) => {
+    floatingDrag.current = { direction, startX: event.clientX, startY: event.clientY, start: consoleLayout }
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+  const moveFloatingDrag = (event: React.PointerEvent<HTMLElement>) => {
+    const drag = floatingDrag.current
+    if (!drag) return
+    const dx = event.clientX - drag.startX
+    const dy = event.clientY - drag.startY
+    const { start, direction } = drag
+    if (direction === 'move') {
+      updateConsoleLayout({ x: start.x + dx, y: start.y + dy })
+      return
+    }
+    const next = { ...start }
+    if (direction.includes('e')) next.width = start.width + dx
+    if (direction.includes('s')) next.height = start.height + dy
+    if (direction.includes('w')) {
+      next.width = Math.max(floatingMinWidth, start.width - dx)
+      next.x = start.x + start.width - next.width
+    }
+    if (direction.includes('n')) {
+      next.height = Math.max(floatingMinHeight, start.height - dy)
+      next.y = start.y + start.height - next.height
+    }
+    setConsoleLayout(clampFloatingConsole(next))
+  }
+  const endFloatingDrag = (event: React.PointerEvent<HTMLElement>) => {
+    floatingDrag.current = null
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+  }
+
   useEffect(() => {
-    const keepConsoleInBounds = () => setConsoleHeight((height) => clampConsoleHeight(height))
+    try {
+      localStorage.setItem(consoleLayoutKey, JSON.stringify(consoleLayout))
+    } catch {
+      // Layout persistence is a convenience; ignore unavailable storage.
+    }
+  }, [consoleLayout])
+
+  useEffect(() => {
+    const keepConsoleInBounds = () => {
+      setConsoleHeight((height) => clampConsoleHeight(height))
+      setConsoleLayout((layout) => clampFloatingConsole(layout))
+    }
     window.addEventListener('resize', keepConsoleInBounds)
     return () => window.removeEventListener('resize', keepConsoleInBounds)
   }, [])
@@ -313,8 +408,19 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
     }
   }, [stage.id])
 
+  const startTimeJump = () => {
+    const checkpoint = stage.checkpoints.find((item) => item.id === selectedCheckpoint)!
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      rewind()
+      return
+    }
+    setTimeJump({ from: playhead, to: checkpoint.time, checkpointId: checkpoint.id, lastDeparted: lastDeparted.current, short: jumpCount.current > 0 })
+  }
+
   const rewind = () => {
     const checkpoint = stage.checkpoints.find((item) => item.id === selectedCheckpoint)!
+    lastDeparted.current = playhead
+    jumpCount.current += 1
     setPhase('EDITING')
     setPlayhead(checkpoint.time)
     setConsoleTab('terminal')
@@ -407,7 +513,7 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
   })
 
   return (
-    <div ref={gameShellRef} className="shell game-shell" style={{ '--stage-accent': stage.accent, '--console-height': `${consoleHeight}px` } as React.CSSProperties}>
+    <div ref={gameShellRef} className="shell game-shell" style={{ '--stage-accent': stage.accent, '--console-height': floating ? '0px' : `${consoleHeight}px` } as React.CSSProperties}>
       <header className="app-header game-header">
         <button className="back-button" onClick={onExit} title="ステージ一覧"><ArrowLeft size={18} /></button>
         <Brand />
@@ -421,7 +527,8 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
 
       <section className="operation-bar">
         <div className={`phase-badge phase-${phase.toLowerCase()}`}><span /> {phaseLabels[phase]}</div>
-        <div className="objective"><span>OBJECTIVE</span><strong>{stage.objective}</strong></div>
+        <PhaseSteps phase={phase} />
+        <div className="objective"><span>目標</span><strong title={stage.objective}>{stage.objective}</strong></div>
         <div className="availability"><Activity size={15} /><span>AVAILABILITY</span><strong>{systemFailure || !settings.service_online ? 'DOWN' : 'HEALTHY'}</strong></div>
       </section>
 
@@ -433,7 +540,7 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
         results={results}
         selectedCheckpoint={selectedCheckpoint}
         onSelectCheckpoint={setSelectedCheckpoint}
-        onRewind={rewind}
+        onRewind={startTimeJump}
         onSimulate={simulate}
         canSimulate={phase === 'EDITING'}
       />
@@ -442,9 +549,9 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
         <section className="infra-panel panel">
           <div className="panel-header">
             <div><Network size={16} /><strong>INFRASTRUCTURE</strong><span>SESSION / {stage.id.toUpperCase()}</span></div>
-            <div className="map-legend"><span><i className="online-dot" /> CUSTOMER ACCESS</span><span><i className="attack-dot" /> ATTACKER ACCESS</span></div>
+            <div className="map-legend"><span><i className="online-dot" /> 正規アクセス</span><span><i className="attack-dot" /> 攻撃者アクセス</span></div>
           </div>
-          <InfraGraph stage={stage} selectedId={selectedServerId} onSelect={setSelectedServerId} results={results} playhead={playhead} />
+          <InfraGraph stage={stage} selectedId={selectedServerId} terminalId={consoleTab === 'terminal' ? terminalServer.id : null} onSelect={setSelectedServerId} results={results} playhead={playhead} />
         </section>
 
         <aside className="detail-panel panel">
@@ -453,12 +560,26 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
             <div><span>{selectedServer.role}</span><h2>{selectedServer.label}</h2><code>{selectedServer.ip}</code></div>
             <span className="online-label"><i /> ONLINE</span>
           </div>
-          <ServerDetails stage={stage} server={selectedServer} settings={settings} />
+          <ServerDetails stage={stage} server={selectedServer} settings={settings} editing={phase === 'EDITING'} onOpenTerminal={() => { setTerminalServerId(selectedServer.id); setConsoleTab('terminal') }} />
         </aside>
       </main>
 
-      <section className="console-panel panel">
-        <button
+      <section
+        className={`console-panel panel ${floating ? 'floating' : ''} ${floating && consoleLayout.minimized ? 'minimized' : ''}`}
+        style={floating ? { left: consoleLayout.x, top: consoleLayout.y, width: consoleLayout.width, height: consoleLayout.minimized ? consoleToolbarHeight : consoleLayout.height } : undefined}
+      >
+        {floating && !consoleLayout.minimized && resizeDirections.map((direction) => (
+          <span
+            key={direction}
+            className={`float-resize float-resize-${direction}`}
+            aria-hidden="true"
+            onPointerDown={(event) => startFloatingDrag(direction, event)}
+            onPointerMove={moveFloatingDrag}
+            onPointerUp={endFloatingDrag}
+            onPointerCancel={() => { floatingDrag.current = null }}
+          />
+        ))}
+        {!floating && <button
           className="console-resize-handle"
           type="button"
           role="separator"
@@ -483,8 +604,21 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
             if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
           }}
           onPointerCancel={() => { consoleResizeDrag.current = null }}
-        ><span /></button>
-        <div className="console-toolbar">
+        ><span /></button>}
+        <div
+          className="console-toolbar"
+          title={floating ? '空いている部分をドラッグして移動' : undefined}
+          onPointerDown={(event) => {
+            if (!floating || (event.target as HTMLElement).closest('button, input, select, label')) return
+            startFloatingDrag('move', event)
+          }}
+          onPointerMove={moveFloatingDrag}
+          onPointerUp={endFloatingDrag}
+          onPointerCancel={() => { floatingDrag.current = null }}
+          onDoubleClick={(event) => {
+            if (floating && !(event.target as HTMLElement).closest('button, input, select, label')) updateConsoleLayout({ minimized: !consoleLayout.minimized })
+          }}
+        >
           <div className="tab-list console-tabs">
             <button className={consoleTab === 'logs' ? 'active' : ''} onClick={() => setConsoleTab('logs')}><FileCode2 size={15} /> イベントログ <span>{logs.length}</span></button>
             <button className={consoleTab === 'terminal' ? 'active' : ''} onClick={() => setConsoleTab('terminal')}><TerminalSquare size={15} /> ターミナル</button>
@@ -503,6 +637,20 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
               <div className={`runtime-status runtime-${runtime.status}`} title={runtime.message}><i /><strong>{runtime.status === 'live' ? 'LIVE DOCKER' : runtime.status === 'connecting' ? 'CONNECTING' : runtime.status === 'error' ? 'LOCAL FALLBACK' : 'LOCAL SIM'}</strong></div>
             </div>
           )}
+          <div className="console-window-controls">
+            {floating && (
+              <button onClick={() => updateConsoleLayout({ minimized: !consoleLayout.minimized })} title={consoleLayout.minimized ? '元のサイズに戻す' : '最小化'} aria-label={consoleLayout.minimized ? '元のサイズに戻す' : '最小化'}>
+                {consoleLayout.minimized ? <ChevronUp size={15} /> : <Minus size={15} />}
+              </button>
+            )}
+            <button
+              onClick={() => updateConsoleLayout(floating ? { mode: 'docked', minimized: false } : { mode: 'floating' })}
+              title={floating ? '画面下部に戻す' : 'ウィンドウとして切り離す'}
+              aria-label={floating ? '画面下部に戻す' : 'ウィンドウとして切り離す'}
+            >
+              {floating ? <PanelBottom size={15} /> : <PictureInPicture2 size={15} />}
+            </button>
+          </div>
         </div>
         <div className="console-body">
           {consoleTab === 'logs' && <LogViewer logs={filteredLogs} loading={phase === 'INITIALIZING'} />}
@@ -524,8 +672,115 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
       {hintOpen && <HintDrawer hints={revealedHints} onReveal={revealHint} hasMore={revealedHints.length < Object.values(stage.scenario.nodes).flatMap((node) => node.hints).length} onClose={() => setHintOpen(false)} />}
       {resultDialog && <ResultDialog result={resultDialog} stage={stage} elapsed={elapsed} hints={revealedHints.length} onClose={() => setResultDialog(null)} onExit={onExit} onReset={onReset} />}
       {systemFailure && <SystemFailureDialog failure={systemFailure} stage={stage} onExit={onExit} onReset={onReset} />}
+      {timeJump && <TimeJump jump={timeJump} onJump={rewind} onDone={() => setTimeJump(null)} />}
       {confirmReset && <ConfirmDialog title="ステージをリセット" body="現在の設定変更と調査ログは破棄され、初期状態から再開します。" confirm="リセット" onCancel={() => setConfirmReset(false)} onConfirm={onReset} />}
       {phase === 'INITIALIZING' && <div className="initializing-overlay"><div className="loader-ring" /><strong>ISOLATED RANGE</strong><span>コンテナ構成を復元しています</span></div>}
+    </div>
+  )
+}
+
+const phaseSteps = ['攻撃を観察', '過去へ戻る', 'ターミナルで対策', 'シミュレーション検証']
+
+function PhaseSteps({ phase }: { phase: Phase }) {
+  const current = phase === 'EDITING' ? 2 : phase === 'SIMULATING' ? 3 : phase === 'CLEARED' ? phaseSteps.length : 0
+  return (
+    <ol className="phase-steps" aria-label="進め方">
+      {phaseSteps.map((label, index) => (
+        <li key={label} className={index < current ? 'done' : index === current ? 'current' : ''} aria-current={index === current ? 'step' : undefined}>
+          <span>{index < current ? <Check size={11} /> : index + 1}</span>{label}
+        </li>
+      ))}
+    </ol>
+  )
+}
+
+interface TimeJumpInfo {
+  from: number
+  to: number
+  checkpointId: string
+  lastDeparted: number | null
+  short: boolean
+}
+
+const formatGameTime = (seconds: number | null) => seconds === null ? '--:--' : `00:${String(seconds).padStart(2, '0')}`
+
+function TimeJump({ jump, onJump, onDone }: { jump: TimeJumpInfo; onJump: () => void; onDone: () => void }) {
+  const jumpAt = jump.short ? 120 : 1450
+  const doneAt = jump.short ? 800 : 2300
+  const [speed, setSpeed] = useState(jump.short ? 88 : 0)
+  const [jumpStage, setJumpStage] = useState<'charging' | 'jumped'>(jump.short ? 'jumped' : 'charging')
+  const jumped = useRef(false)
+  const skipRef = useRef<() => void>(() => undefined)
+  const callbacks = useRef({ onJump, onDone })
+  callbacks.current = { onJump, onDone }
+
+  useEffect(() => {
+    const fire = () => {
+      if (jumped.current) return
+      jumped.current = true
+      setSpeed(88)
+      setJumpStage('jumped')
+      callbacks.current.onJump()
+    }
+    const finish = () => {
+      fire()
+      callbacks.current.onDone()
+    }
+    const startedAt = performance.now()
+    let frame = 0
+    const tick = (now: number) => {
+      const progress = Math.min(1, (now - startedAt) / jumpAt)
+      if (!jumped.current) setSpeed(Math.floor(88 * progress * progress))
+      if (progress < 1) frame = requestAnimationFrame(tick)
+    }
+    if (!jump.short) frame = requestAnimationFrame(tick)
+    const jumpTimer = window.setTimeout(fire, jumpAt)
+    const doneTimer = window.setTimeout(finish, doneAt)
+    const skip = (event: KeyboardEvent) => { if (event.key === 'Escape') finish() }
+    window.addEventListener('keydown', skip)
+    skipRef.current = finish
+    return () => {
+      cancelAnimationFrame(frame)
+      window.clearTimeout(jumpTimer)
+      window.clearTimeout(doneTimer)
+      window.removeEventListener('keydown', skip)
+    }
+  }, [jump, jumpAt, doneAt])
+
+  const rows = [
+    { key: 'destination', label: 'DESTINATION TIME', tag: jump.checkpointId.toUpperCase(), time: formatGameTime(jump.to) },
+    { key: 'present', label: 'PRESENT TIME', tag: 'NOW', time: formatGameTime(jump.from) },
+    { key: 'departed', label: 'LAST TIME DEPARTED', tag: jump.lastDeparted === null ? '---' : 'PREV', time: formatGameTime(jump.lastDeparted) },
+  ]
+
+  return (
+    <div
+      className={`time-jump ${jump.short ? 'short' : ''} ${jumpStage} ${speed >= 60 ? 'shaking' : ''}`}
+      role="status"
+      aria-live="polite"
+      aria-label={`${jump.checkpointId.toUpperCase()} へ時間移動中`}
+      title="クリックでスキップ"
+      onClick={() => skipRef.current()}
+    >
+      {!jump.short && (
+        <div className="time-circuits">
+          {rows.map((row) => (
+            <div className={`circuit-row circuit-${row.key}`} key={row.key}>
+              <div className="circuit-digits"><span>{row.tag}</span><span>{row.time}</span></div>
+              <div className="circuit-label">{row.label}</div>
+            </div>
+          ))}
+          <div className="speedometer"><strong>{String(speed).padStart(2, '0')}</strong><span>MPH</span></div>
+          <svg className="time-sparks" viewBox="0 0 400 200" preserveAspectRatio="none" aria-hidden="true">
+            <polyline points="10,40 60,55 45,80 110,95 90,120 150,140" />
+            <polyline points="390,30 340,60 360,85 300,100 320,130 250,160" />
+            <polyline points="200,0 185,40 215,60 190,100 210,130 195,200" />
+          </svg>
+        </div>
+      )}
+      <div className="time-flash" />
+      <div className="fire-trail fire-trail-a" />
+      <div className="fire-trail fire-trail-b" />
     </div>
   )
 }
@@ -605,7 +860,7 @@ function Timeline({
   )
 }
 
-function InfraGraph({ stage, selectedId, onSelect, results, playhead }: { stage: LoadedStage; selectedId: string; onSelect: (id: string) => void; results: AttackResult[]; playhead: number }) {
+function InfraGraph({ stage, selectedId, terminalId, onSelect, results, playhead }: { stage: LoadedStage; selectedId: string; terminalId: string | null; onSelect: (id: string) => void; results: AttackResult[]; playhead: number }) {
   const activeResult = [...results].reverse().find((result) => result.time <= playhead)
   const activeTarget = activeResult ? stage.scenario.nodes[activeResult.nodeId].target : null
   const customerTarget = stage.infra.servers.find((server) => server.id === stage.availability_checks[0]?.target) ?? stage.infra.servers.find((server) => server.status === 'online') ?? stage.infra.servers[0]
@@ -613,13 +868,14 @@ function InfraGraph({ stage, selectedId, onSelect, results, playhead }: { stage:
   const graphRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLDivElement>(null)
   const edges = [
-    { from: customerPosition, to: customerTarget.position, label: 'NORMAL ACCESS', kind: 'customer-edge', animated: true },
+    { from: customerPosition, to: customerTarget.position, label: 'NORMAL ACCESS', kind: 'customer-edge', labelKind: 'customer', animated: true },
     ...stage.infra.connections.map((edge) => {
       const from = stage.infra.servers.find((server) => server.id === edge.from)!
       const to = stage.infra.servers.find((server) => server.id === edge.to)!
       return {
         from: from.position, to: to.position, label: edge.label,
         kind: `${from.status === 'restricted' ? 'threat-edge' : ''} ${activeTarget === to.id || activeTarget === from.id ? 'hot-edge' : ''}`,
+        labelKind: from.status === 'restricted' ? 'threat' : '',
         animated: from.status === 'restricted',
       }
     }),
@@ -671,7 +927,7 @@ function InfraGraph({ stage, selectedId, onSelect, results, playhead }: { stage:
         ))}
       </svg>
       {edges.map((edge, index) => (
-        <span key={index} className={`connection-label ${edge.kind}`}>{edge.label}</span>
+        <span key={index} className={`connection-label ${edge.labelKind}`}>{edge.label}</span>
       ))}
       <div className="infra-node customer-node" style={{ left: `${customerPosition.x}%`, top: `${customerPosition.y}%` }} aria-label="正規利用客がサービスにアクセス中">
         <span className="node-icon"><UsersRound size={20} /></span>
@@ -691,6 +947,7 @@ function InfraGraph({ stage, selectedId, onSelect, results, playhead }: { stage:
             <span className="node-copy"><strong>{server.label}</strong><small>{server.role}</small><code>{server.ip}</code></span>
             <i className="node-status" />
             {server.status === 'restricted' && <span className="threat-label">ATTACKER</span>}
+            {terminalId === server.id && <span className="terminal-badge"><TerminalSquare size={11} /> TERMINAL</span>}
             {isTarget && <span className="pulse-ring" />}
           </button>
         )
@@ -710,7 +967,7 @@ function ServerIcon({ server }: { server: ServerDefinition }) {
   return <Server size={20} />
 }
 
-function ServerDetails({ stage, server, settings }: { stage: LoadedStage; server: ServerDefinition; settings: Record<string, boolean> }) {
+function ServerDetails({ stage, server, settings, editing, onOpenTerminal }: { stage: LoadedStage; server: ServerDefinition; settings: Record<string, boolean>; editing: boolean; onOpenTerminal: () => void }) {
   const defenses = stage.defenses.filter((defense) => defense.serverId === server.id)
   return (
     <div className="server-details scroll-area">
@@ -721,7 +978,22 @@ function ServerDetails({ stage, server, settings }: { stage: LoadedStage; server
         <div><dt>SHELL</dt><dd>{server.shell ? 'ENABLED' : 'LOCKED'}</dd></div>
       </dl>
       <div className="detail-section"><h3>SERVICES</h3>{server.services.map((service, index) => <div className="service-row" key={service}><Activity size={14} /><strong>{service}</strong><span>RUNNING</span><code>{server.ports[index] ? `:${server.ports[index]}` : 'internal'}</code></div>)}</div>
-      <div className="detail-section"><h3>APPLIED DEFENSES</h3>{defenses.length ? defenses.map((defense) => <div className="applied-row" key={defense.id}><span className={settings[defense.id] ? 'enabled' : ''}>{settings[defense.id] ? <Check size={13} /> : <X size={13} />}</span><div><strong>{defense.label}</strong><small>{settings[defense.id] ? defense.onLabel : defense.offLabel}</small></div></div>) : <p className="empty-copy">編集可能な設定はありません。</p>}</div>
+      <div className="detail-section">
+        <h3>防御設定</h3>
+        {defenses.length ? (
+          <>
+            {defenses.map((defense) => (
+              <div className="applied-row" key={defense.id}>
+                <div><strong>{defense.label}</strong><small>{settings[defense.id] ? defense.onLabel : defense.offLabel}</small></div>
+                <span className={`state-pill ${settings[defense.id] ? 'enabled' : ''}`}>{settings[defense.id] ? 'ON' : 'OFF'}</span>
+                <code>config set {defense.id}.conf {defense.id} on|off</code>
+              </div>
+            ))}
+            <p className="defense-note">{editing ? '設定はこのノードのターミナルで上のコマンドを実行して変更します。' : '設定を変更するには、まず「過去へ戻る」で対策フェーズに入ってください。'}</p>
+            {server.shell && <button className="secondary-button open-terminal" onClick={onOpenTerminal}><TerminalSquare size={14} /> {server.label} のターミナルを開く</button>}
+          </>
+        ) : <p className="empty-copy">このノードに変更できる設定はありません。</p>}
+      </div>
     </div>
   )
 }
