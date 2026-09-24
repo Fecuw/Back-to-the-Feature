@@ -458,7 +458,7 @@ function GameSession({ stage, onExit, onReset }: { stage: LoadedStage; onExit: (
       time: `00:${String(playhead + 2).padStart(2, '0')}`,
       server: 'customer-support',
       level: 'ALERT',
-      message: '顧客から苦情: 「システム使えんやんけ！」',
+      message: '顧客から苦情: 「システムが使えないじゃないか！」',
     }, {
       id: `sla-${failureTime}-${serverId}`,
       time: `00:${String(playhead + 1).padStart(2, '0')}`,
@@ -1078,7 +1078,7 @@ function SystemFailureDialog({ failure, stage, onExit, onReset }: { failure: { s
           </div>
           <div className="complaint-bubble">
             <span><MessageSquareWarning size={15} /> 苦情が着信</span>
-            <h3>「システム使えんやんけ！」</h3>
+            <h3>「システムが使えないじゃないか！」</h3>
             <p>使っていたサービスが突然切断されました。</p>
           </div>
           <div className="failure-server">
