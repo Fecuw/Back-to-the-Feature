@@ -1,0 +1,17 @@
+{
+  "root": "dependency_confusion",
+  "nodes": {
+    "dependency_confusion": {
+      "title": "依存関係混同", "time": 20, "target": "ci", "severity": "critical", "action": "Package resolution", "blockedBy": ["lockfile_frozen", "verify_signature"], "on_success": "postinstall", "on_failure": null, "evidenceSuccess": "公開レジストリの高いバージョンを優先解決", "evidenceFailure": "lockfile/署名ポリシーに不一致。インストール中止", "logsSuccess": ["resolved @internal/telemetry@99.4.1 registry=public", "package integrity sha512 accepted without provenance"], "logsFailure": ["ERR_PACKAGE_POLICY: untrusted provenance for @internal/telemetry"], "hints": ["同名パッケージのバージョンと取得元を比較する。", "依存解決の再現性か発行元の信頼性を固定する。"]
+    },
+    "postinstall": {
+      "title": "postinstall実行", "time": 42, "target": "ci", "severity": "high", "action": "Lifecycle script", "blockedBy": [], "on_success": "token_theft", "on_failure": null, "evidenceSuccess": "難読化されたnodeプロセスが環境変数を列挙", "evidenceFailure": "lifecycle script disabled", "logsSuccess": ["> @internal/telemetry postinstall", "child_process spawned: node .cache/init.js"], "logsFailure": ["lifecycle scripts disabled by policy"], "hints": ["postinstall はパッケージ導入時に任意コードを実行できる。"]
+    },
+    "token_theft": {
+      "title": "CIトークン窃取", "time": 49, "target": "vault", "severity": "critical", "action": "Environment scrape", "blockedBy": ["short_lived_token"], "on_success": "exfiltration", "on_failure": null, "evidenceSuccess": "長期Vaultトークンでproduction/secretsを読取", "evidenceFailure": "トークンは期限切れ、productionパスのscopeなし", "logsSuccess": ["vault read secret/production/deploy-token by ci-legacy", "token ttl=0 scope=*"], "logsFailure": ["vault: permission denied path=secret/production"], "hints": ["侵害を前提に、CIへ渡す秘密情報の寿命と権限を最小化する。"]
+    },
+    "exfiltration": {
+      "title": "秘密情報の持ち出し", "time": 57, "target": "ci", "severity": "critical", "action": "HTTPS egress", "blockedBy": ["egress_deny"], "on_success": null, "on_failure": null, "evidenceSuccess": "未知ホストへ暗号化済みペイロードを送信", "evidenceFailure": "外向きAllowlistにない宛先を遮断", "logsSuccess": ["POST https://collect-builds.example/upload 200 bytes=18432"], "logsFailure": ["egress drop dst=192.0.2.199:443 process=node"], "hints": ["最後の防壁として、ビルドワーカーが通信できる宛先を絞る。"]
+    }
+  }
+}

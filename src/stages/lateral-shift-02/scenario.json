@@ -1,0 +1,14 @@
+{
+  "root": "ssh_bruteforce",
+  "nodes": {
+    "ssh_bruteforce": {
+      "title": "SSH総当たり", "time": 16, "target": "bastion", "severity": "high", "action": "SSH password spray", "blockedBy": ["ssh_keys_only"], "on_success": "db_probe", "on_failure": "ssrf", "evidenceSuccess": "backupユーザーの弱いパスワードでログイン", "evidenceFailure": "公開鍵を持たない接続を拒否", "logsSuccess": ["Accepted password for backup from 203.0.113.77", "session opened for user backup"], "logsFailure": ["Permission denied (publickey) for backup"], "hints": ["認証ログの Accepted password に注目する。", "管理用SSHにパスワード認証は必要だろうか。"]
+    },
+    "ssrf": {
+      "title": "SSRF内部探索", "time": 27, "target": "api", "severity": "high", "action": "GET /proxy?url=", "blockedBy": ["ssrf_allowlist"], "on_success": "db_probe", "on_failure": null, "evidenceSuccess": "API経由で 10.20.2.14:8123 に到達", "evidenceFailure": "未承認のプライベートIP宛てURLを拒否", "logsSuccess": ["proxy target=http://10.20.2.14:8123 status=200", "metadata route requested by external principal"], "logsFailure": ["egress_policy denied destination=10.20.2.14"], "hints": ["ユーザー入力のURLをサーバーが代理取得している。", "接続先を拒否リストではなく許可リストで制御する。"]
+    },
+    "db_probe": {
+      "title": "分析DB探索", "time": 34, "target": "analytics", "severity": "critical", "action": "ClickHouse query", "blockedBy": ["segment_data"], "on_success": null, "on_failure": null, "evidenceSuccess": "system.tables と events_raw の読み取りに成功", "evidenceFailure": "接続元セグメントがポリシーに一致せず遮断", "logsSuccess": ["Query SELECT * FROM system.tables user=default", "Query SELECT token FROM events_raw LIMIT 1000"], "logsFailure": ["nftables drop src=10.20.0.4 dst_port=8123"], "hints": ["アプリの防御だけでなく、データ層へ到達できる送信元を絞る。"]
+    }
+  }
+}

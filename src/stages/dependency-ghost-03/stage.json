@@ -1,0 +1,44 @@
+{
+  "id": "dependency-ghost-03",
+  "number": "03",
+  "title": "ビルドに潜む影",
+  "codename": "GHOST PACKAGE",
+  "description": "更新ジョブが持ち込んだ不審な依存パッケージ。実行前に信頼の連鎖を取り戻せ。",
+  "difficulty": 3,
+  "category": ["SUPPLY CHAIN", "EGRESS"],
+  "estimatedMinutes": 15,
+  "accent": "#e4b84b",
+  "evaluation": "single_path",
+  "briefing": "夜間ビルド直後から、CIワーカーが未知のホストへ通信している。パッケージ名は社内ライブラリと酷似していた。ビルドを維持しつつ、改ざんコードの実行と秘密情報の流出を防いでほしい。",
+  "objective": "不正パッケージを排除し、CIの成果物生成を維持する",
+  "infra": {
+    "servers": [
+      { "id": "registry", "label": "REGISTRY", "role": "外部レジストリ", "ip": "192.0.2.31", "status": "restricted", "services": ["npm registry"], "ports": [443], "shell": false, "position": { "x": 9, "y": 27 } },
+      { "id": "ci", "label": "CI-RUNNER", "role": "ビルドワーカー", "ip": "10.30.1.20", "status": "online", "services": ["runner", "containerd"], "ports": [22], "shell": true, "position": { "x": 42, "y": 45 } },
+      { "id": "vault", "label": "VAULT-01", "role": "シークレット保管", "ip": "10.30.2.5", "status": "online", "services": ["vault"], "ports": [8200], "shell": true, "position": { "x": 75, "y": 25 } },
+      { "id": "artifact", "label": "ARTIFACT-01", "role": "成果物保管", "ip": "10.30.2.18", "status": "online", "services": ["object-store"], "ports": [9000], "shell": true, "position": { "x": 75, "y": 68 } }
+    ],
+    "connections": [
+      { "from": "registry", "to": "ci", "label": "PACKAGE" },
+      { "from": "ci", "to": "vault", "label": "OIDC" },
+      { "from": "ci", "to": "artifact", "label": "UPLOAD" }
+    ]
+  },
+  "checkpoints": [
+    { "id": "cp0", "time": 0, "label": "ビルド待機" },
+    { "id": "cp1", "time": 20, "label": "依存解決前" },
+    { "id": "cp2", "time": 42, "label": "postinstall前" }
+  ],
+  "defenses": [
+    { "id": "lockfile_frozen", "serverId": "ci", "label": "ロックファイル固定", "description": "lockfileとの差分がある依存解決を失敗させる", "onLabel": "frozen", "offLabel": "自動更新", "default": false, "configPath": "/workspace/ci/build.yaml" },
+    { "id": "verify_signature", "serverId": "ci", "label": "来歴署名を検証", "description": "承認済み発行元の署名がないパッケージを拒否", "onLabel": "必須", "offLabel": "未検証", "default": false, "configPath": "/etc/package-policy.json" },
+    { "id": "short_lived_token", "serverId": "vault", "label": "短命スコープトークン", "description": "ビルド単位・成果物書込のみに権限を限定", "onLabel": "10分/限定", "offLabel": "長期/広範", "default": false, "configPath": "/vault/policies/ci.hcl" },
+    { "id": "egress_deny", "serverId": "ci", "label": "外向き通信制御", "description": "レジストリと成果物保管以外への通信を遮断", "onLabel": "Allowlist", "offLabel": "全許可", "default": false, "configPath": "/etc/nftables.d/egress.nft" },
+    { "id": "service_online", "serverId": "artifact", "label": "成果物パイプライン", "description": "署名済み成果物の生成チェック", "onLabel": "稼働", "offLabel": "停止", "default": true, "configPath": "pipeline://release" }
+  ],
+  "availability_checks": [
+    { "id": "trusted-install", "settingId": "service_online", "label": "承認済み依存パッケージを導入", "target": "ci", "entrypoint": "package install", "expect": true, "failureStatus": "MUMBLE" },
+    { "id": "scoped-secret", "settingId": "service_online", "label": "正規ビルドが限定シークレットを取得", "target": "vault", "entrypoint": "Vault OIDC", "expect": true, "failureStatus": "DOWN" },
+    { "id": "artifact-output", "settingId": "service_online", "label": "署名済み成果物を生成", "target": "artifact", "entrypoint": "artifact upload", "expect": true, "failureStatus": "CORRUPT" }
+  ]
+}

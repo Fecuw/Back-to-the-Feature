@@ -1,0 +1,25 @@
+{
+  "root": "recon",
+  "nodes": {
+    "recon": {
+      "title": "サービス偵察", "time": 12, "target": "gateway", "severity": "low", "action": "HTTP fingerprint", "blockedBy": ["rate_limit"], "on_success": "sqli", "on_failure": "sqli",
+      "evidenceSuccess": "nginx/1.24 と /api/login を特定", "evidenceFailure": "公開情報を最小化", "logsSuccess": ["GET /.env 404 146 '-' scan/2.1", "POST /api/login 401 52 '-' curl/8.4"], "logsFailure": ["Fingerprint request rejected by edge policy"],
+      "hints": ["偵察そのものより、その後の認証APIへの入力に注目しよう。"]
+    },
+    "sqli": {
+      "title": "SQLインジェクション", "time": 28, "target": "web", "severity": "critical", "action": "POST /api/login", "blockedBy": ["parameterized_query"], "on_success": "export", "on_failure": "credential_stuffing",
+      "evidenceSuccess": "admin' OR 1=1-- で管理者セッションを発行", "evidenceFailure": "入力値をデータとして処理。SQL構造は不変", "logsSuccess": ["auth query returned 1 row for malformed principal", "session issued role=admin source=198.51.100.42"], "logsFailure": ["prepared statement rejected invalid credential"],
+      "hints": ["ログに現れたシングルクォートは、SQL文の境界を壊している。", "認証クエリを文字列連結からプレースホルダー方式へ変える。"]
+    },
+    "credential_stuffing": {
+      "title": "認証情報総当たり", "time": 36, "target": "gateway", "severity": "high", "action": "Credential stuffing", "blockedBy": ["rate_limit"], "on_success": "export", "on_failure": null,
+      "evidenceSuccess": "2,184回の試行後、再利用パスワードで認証", "evidenceFailure": "6回目の試行を429で遮断", "logsSuccess": ["2184 login attempts from 198.51.100.42", "valid credential matched account=ops-admin"], "logsFailure": ["limit_req: excess 5.800, client: 198.51.100.42"],
+      "hints": ["SQLiを塞ぐと、攻撃者はパスワードの総当たりへ切り替える。", "入口のレート制限は、アプリへ届く前に試行回数を抑えられる。"]
+    },
+    "export": {
+      "title": "顧客データ窃取", "time": 48, "target": "db", "severity": "critical", "action": "COPY customers", "blockedBy": ["admin_acl"], "on_success": null, "on_failure": null,
+      "evidenceSuccess": "customers 48,219件を /tmp/export.csv へ出力", "evidenceFailure": "app_runtime に COPY 権限なし", "logsSuccess": ["COPY 48219", "egress burst 18.4MB destination=198.51.100.42"], "logsFailure": ["permission denied for table customers (SQLSTATE 42501)"],
+      "hints": ["侵入を完全に防げなくても、DB側の最小権限が最後の防壁になる。"]
+    }
+  }
+}

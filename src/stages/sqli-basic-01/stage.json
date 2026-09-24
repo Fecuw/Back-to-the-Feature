@@ -1,0 +1,43 @@
+{
+  "id": "sqli-basic-01",
+  "number": "01",
+  "title": "壊れたログインフォーム",
+  "codename": "SILENT ENTRY",
+  "description": "認証APIから始まる不審な通信。侵入経路を塞ぎ、顧客データの流出を阻止せよ。",
+  "difficulty": 1,
+  "category": ["WEB", "SQLi"],
+  "estimatedMinutes": 8,
+  "accent": "#ff5d45",
+  "evaluation": "single_path",
+  "briefing": "02:14、公開Webサーバーで異常な認証成功が記録された。その4分後、顧客テーブルのエクスポートが始まっている。攻撃を観測し、正常なサービスを維持したまま侵入経路を断ってほしい。",
+  "objective": "顧客データの流出を防ぎ、Webサービスの応答を維持する",
+  "infra": {
+    "servers": [
+      { "id": "attacker", "label": "UNKNOWN", "role": "外部ホスト", "ip": "198.51.100.42", "status": "restricted", "services": ["attack runner"], "ports": [], "shell": false, "position": { "x": 9, "y": 46 } },
+      { "id": "gateway", "label": "EDGE-01", "role": "ゲートウェイ", "ip": "10.10.0.1", "status": "online", "services": ["nginx", "firewall"], "ports": [80, 443], "shell": true, "position": { "x": 35, "y": 46 } },
+      { "id": "web", "label": "WEB-01", "role": "認証API", "ip": "10.10.1.12", "status": "online", "services": ["nginx", "node-api"], "ports": [3000], "shell": true, "position": { "x": 61, "y": 25 } },
+      { "id": "db", "label": "DB-01", "role": "顧客DB", "ip": "10.10.2.8", "status": "online", "services": ["postgresql"], "ports": [5432], "shell": true, "position": { "x": 86, "y": 46 } }
+    ],
+    "connections": [
+      { "from": "attacker", "to": "gateway", "label": "WAN" },
+      { "from": "gateway", "to": "web", "label": "DMZ" },
+      { "from": "web", "to": "db", "label": "INTERNAL" }
+    ]
+  },
+  "checkpoints": [
+    { "id": "cp0", "time": 0, "label": "平常稼働" },
+    { "id": "cp1", "time": 12, "label": "偵察直前" },
+    { "id": "cp2", "time": 28, "label": "侵入直前" }
+  ],
+  "defenses": [
+    { "id": "parameterized_query", "serverId": "web", "label": "パラメータ化クエリ", "description": "認証SQLをプレースホルダー方式へ変更", "onLabel": "適用済み", "offLabel": "文字列連結", "default": false, "configPath": "/app/src/auth.ts" },
+    { "id": "rate_limit", "serverId": "gateway", "label": "認証レート制限", "description": "同一IPからの試行を毎分5回に制限", "onLabel": "5 req/min", "offLabel": "制限なし", "default": false, "configPath": "/etc/nginx/conf.d/auth.conf" },
+    { "id": "admin_acl", "serverId": "db", "label": "エクスポート権限分離", "description": "Web実行ユーザーから一括出力権限を削除", "onLabel": "最小権限", "offLabel": "過剰権限", "default": false, "configPath": "/etc/postgresql/roles.sql" },
+    { "id": "service_online", "serverId": "web", "label": "Webサービス", "description": "正規ユーザー向けヘルスチェック", "onLabel": "稼働", "offLabel": "停止", "default": true, "configPath": "service://node-api" }
+  ],
+  "availability_checks": [
+    { "id": "edge-entry", "settingId": "service_online", "label": "正規クライアントがHTTPS入口へ到達", "target": "gateway", "entrypoint": "HTTPS /api/login", "expect": true, "failureStatus": "DOWN" },
+    { "id": "valid-login", "settingId": "service_online", "label": "正しい認証情報でログイン成功", "target": "web", "entrypoint": "POST /api/login", "expect": true, "failureStatus": "MUMBLE" },
+    { "id": "account-read", "settingId": "service_online", "label": "本人のアカウント情報を取得", "target": "db", "entrypoint": "SELECT own profile", "expect": true, "failureStatus": "CORRUPT" }
+  ]
+}
